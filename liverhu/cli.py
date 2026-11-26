@@ -54,7 +54,8 @@ def _cmd_serve(a) -> int:
     from .web.app import create_app
     app = create_app(data, keep_uploads=a.keep_uploads)
     from . import __version__
-    print(f"\nLiver HU website v{__version__} (liver + spleen) running. On this computer open: http://localhost:{a.port}")
+    mode = " [low-memory mode]" if os.environ.get("LIVERHU_LOW_MEMORY") == "1" else ""
+    print(f"\nLiver HU website v{__version__} (liver + spleen){mode} running. On this computer open: http://localhost:{a.port}")
     print(f"Others on the lab network open: http://<this-computer's-name-or-IP>:{a.port}")
     print("Leave this window open while people use the website. Press Ctrl+C to stop.\n")
     uvicorn.run(app, host=a.host, port=a.port, log_level="warning")

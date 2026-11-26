@@ -39,13 +39,30 @@ _PREDICTORS: dict = {}
 # threads: lower peak RAM for 8 GB computers; segment borders differ very slightly
 # (Dice ~0.96-0.99), so use one setting for a whole study (recorded as model_tile).
 DEFAULT_TILE = [64, 192, 192]
-LOW_MEMORY_TILE = [int(v) for v in os.environ.get("LIVERHU_LOW_TILE", "64,160,160").split(",")]
+LOW_MEMORY_TILE = [int(v) for v in os.environ.get("LIVERHU_LOW_TILE", "48,128,128").split(",")]
 LOW_MEMORY_ORGANS_TILE = [int(v) for v in os.environ.get("LIVERHU_LOW_ORGANS_TILE", "96,96,96").split(",")]
 LOW_MEMORY = os.environ.get("LIVERHU_LOW_MEMORY", "").lower() in ("1", "true", "yes")
 PATCH_OVERRIDE: dict = {}
 if LOW_MEMORY:
     PATCH_OVERRIDE[LIVER_SEGMENTS_TASK] = LOW_MEMORY_TILE
     PATCH_OVERRIDE[ORGANS_TASK] = LOW_MEMORY_ORGANS_TILE
+
+
+def valid_tile(patch, configuration: dict) -> list:
+    """Round a tile size up so each side is a multiple of the network's total
+    down-sampling along that axis (otherwise the U-Net's skip connections mismatch),
+    never exceeding the model's own tile size."""
+    arch = (configuration.get("architecture") or {}).get("arch_kwargs") or {}
+    strides = arch.get("strides") or configuration.get("pool_op_kernel_sizes") or []
+    default = list(configuration.get("patch_size") or patch)
+    out = []
+    for ax, p in enumerate(patch):
+        div = 1
+        for s in strides:
+            div *= int(s[ax]) if isinstance(s, (list, tuple)) else int(s)
+        v = int(math.ceil(int(p) / div) * div)
+        out.append(min(v, int(default[ax])) if ax < len(default) else v)
+    return out
 
 
 def release_memory() -> None:
@@ -115,7 +132,8 @@ def _predictor(task_id: int, trainer: str, step_size: float):
         gc.collect()
     patch = PATCH_OVERRIDE.get(task_id)
     if patch:   # smaller sliding-window tiles -> lower peak RAM (same network, same weights)
-        pred.configuration_manager.configuration["patch_size"] = list(patch)
+        pred.configuration_manager.configuration["patch_size"] = valid_tile(
+            patch, pred.configuration_manager.configuration)
     _PREDICTORS[key] = pred
     return pred
 
