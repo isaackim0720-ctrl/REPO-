@@ -34,25 +34,31 @@ ORGANS_SPACING_MM = [1.5, 1.5, 1.5]
 REQUIRED_MODELS = (COARSE_TASK, LIVER_SEGMENTS_TASK, ORGANS_TASK)
 
 _PREDICTORS: dict = {}
-# Tile size used for the liver-segments model. Default = the model's own 64 x 192 x 192.
-# LIVERHU_LOW_MEMORY=1 uses 64 x 160 x 160 tiles: ~0.6 GB less peak RAM, segment
-# boundaries differ very slightly (Dice ~0.96-0.99) - use one setting for a whole study.
+# Tile sizes. Default = each model's own (liver segments 64 x 192 x 192, organs 128^3).
+# LIVERHU_LOW_MEMORY=1 (start with --low-memory) uses smaller tiles and at most 4 CPU
+# threads: lower peak RAM for 8 GB computers; segment borders differ very slightly
+# (Dice ~0.96-0.99), so use one setting for a whole study (recorded as model_tile).
 DEFAULT_TILE = [64, 192, 192]
 LOW_MEMORY_TILE = [64, 160, 160]
+LOW_MEMORY_ORGANS_TILE = [96, 96, 96]
+LOW_MEMORY = os.environ.get("LIVERHU_LOW_MEMORY", "").lower() in ("1", "true", "yes")
 PATCH_OVERRIDE: dict = {}
-if os.environ.get("LIVERHU_LOW_MEMORY", "").lower() in ("1", "true", "yes"):
+if LOW_MEMORY:
     PATCH_OVERRIDE[LIVER_SEGMENTS_TASK] = LOW_MEMORY_TILE
+    PATCH_OVERRIDE[ORGANS_TASK] = LOW_MEMORY_ORGANS_TILE
 
 
 def tile_in_use() -> str:
-    return "x".join(str(v) for v in PATCH_OVERRIDE.get(LIVER_SEGMENTS_TASK, DEFAULT_TILE))
+    t = "x".join(str(v) for v in PATCH_OVERRIDE.get(LIVER_SEGMENTS_TASK, DEFAULT_TILE))
+    return t + (" (low-memory)" if LOW_MEMORY else "")
 
 
 def _device():
     import torch
     if torch.cuda.is_available():
         return torch.device("cuda")
-    torch.set_num_threads(max(1, os.cpu_count() or 1))
+    n = max(1, os.cpu_count() or 1)
+    torch.set_num_threads(min(n, 4) if LOW_MEMORY else n)
     return torch.device("cpu")
 
 
