@@ -110,14 +110,19 @@ HU cut-offs for fatty liver (e.g. ≤ 40 HU, or 48 HU) are for **non-contrast** 
 
 ## Memory / speed
 
-| | normal scan (168 slices) | large scan (588 slices) |
-|---|---|---|
-| peak RAM | 4.0 GB | 4.3 GB |
-| time (4 CPU cores) | ~2 min | ~1.5 min |
+Measured on a 4-core computer, liver + spleen, normal scan (168 slices):
 
-If the computer struggles, start with `--low-memory` (≈ 3.4 GB). It uses smaller AI tiles,
-so segment borders shift very slightly; use one setting for a whole study (it is recorded
-in the `model_tile` column). A computer with an NVIDIA GPU is used automatically and is much faster.
+| mode | peak RAM | time |
+|---|---|---|
+| normal | 4.0 GB (large 588-slice scan: 4.4 GB) | ~3 min |
+| low-memory | **2.8 GB** | ~2.5 min |
+
+Low-memory mode uses smaller AI tiles and at most 4 CPU threads. On the test scan the
+results matched normal mode within 1 HU (liver mean 129.2 vs 129.0 HU, spleen identical).
+`scripts/start_mac_linux.sh` switches it on automatically on computers with 8 GB RAM or
+less; elsewhere add `--low-memory`. Use one mode for a whole study; it is recorded in the
+`model_tile` column. Close other programs on the computer that runs the website. A computer
+with an NVIDIA GPU is used automatically and is much faster.
 
 ## Tests
 
