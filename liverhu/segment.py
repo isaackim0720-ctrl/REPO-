@@ -39,13 +39,31 @@ _PREDICTORS: dict = {}
 # threads: lower peak RAM for 8 GB computers; segment borders differ very slightly
 # (Dice ~0.96-0.99), so use one setting for a whole study (recorded as model_tile).
 DEFAULT_TILE = [64, 192, 192]
-LOW_MEMORY_TILE = [64, 160, 160]
-LOW_MEMORY_ORGANS_TILE = [96, 96, 96]
+LOW_MEMORY_TILE = [int(v) for v in os.environ.get("LIVERHU_LOW_TILE", "64,160,160").split(",")]
+LOW_MEMORY_ORGANS_TILE = [int(v) for v in os.environ.get("LIVERHU_LOW_ORGANS_TILE", "96,96,96").split(",")]
 LOW_MEMORY = os.environ.get("LIVERHU_LOW_MEMORY", "").lower() in ("1", "true", "yes")
 PATCH_OVERRIDE: dict = {}
 if LOW_MEMORY:
     PATCH_OVERRIDE[LIVER_SEGMENTS_TASK] = LOW_MEMORY_TILE
     PATCH_OVERRIDE[ORGANS_TASK] = LOW_MEMORY_ORGANS_TILE
+
+
+def release_memory() -> None:
+    """Free unused Python objects and ask the C allocator to hand freed memory back to
+    the operating system (otherwise each stage starts from the previous stage's peak)."""
+    import ctypes
+    import gc
+    import sys
+    gc.collect()
+    try:
+        if sys.platform.startswith("linux"):
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+        elif sys.platform == "darwin":
+            libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
+            libc.malloc_zone_pressure_relief.restype = ctypes.c_size_t
+            libc.malloc_zone_pressure_relief(None, ctypes.c_size_t(0))
+    except Exception:
+        pass
 
 
 def tile_in_use() -> str:
@@ -176,6 +194,7 @@ def _model_on_crop(crop: np.ndarray, spacing, task_id, trainer, target, step_siz
     pred = _predictor(task_id, trainer, step_size=step_size)
     seg_rsp = _predict(pred, data, [float(z) for z in rsp.header.get_zooms()[:3]])
     del data
+    release_memory()
     back = change_spacing(nib.Nifti1Image(seg_rsp, rsp.affine), target, target_shape=crop.shape,
                           order=0, dtype=np.uint8, nr_cpus=1, force_affine=aff)
     return np.asarray(back.dataobj, dtype=np.uint8)
@@ -213,7 +232,7 @@ def segment_liver_and_spleen(vol: np.ndarray, spacing, log=print, spleen: bool =
     info["crop_shape"] = [int(b.stop - b.start) for b in box]
     log(f"liver located in {info['t_locate_s']} s; crop {info['crop_shape']}")
     _PREDICTORS.pop((COARSE_TASK, COARSE_TRAINER), None)   # free the coarse model
-    gc.collect()
+    release_memory()
     t1 = time.time()
     seg_crop = _segments_on_crop(np.asarray(vol[box]), spacing)
     seg = np.zeros(vol.shape, np.uint8)
@@ -222,7 +241,7 @@ def segment_liver_and_spleen(vol: np.ndarray, spacing, log=print, spleen: bool =
     info["t_segments_s"] = round(time.time() - t1, 1)
     log(f"liver segments done in {info['t_segments_s']} s")
     _PREDICTORS.pop((LIVER_SEGMENTS_TASK, LIVER_SEGMENTS_TRAINER), None)
-    gc.collect()
+    release_memory()
 
     spleen_mask = None
     sbox = boxes["spleen"] if spleen else None
@@ -243,7 +262,7 @@ def segment_liver_and_spleen(vol: np.ndarray, spacing, log=print, spleen: bool =
         info["t_spleen_s"] = round(time.time() - t2, 1)
         log(f"spleen done in {info['t_spleen_s']} s")
         _PREDICTORS.pop((ORGANS_TASK, ORGANS_TRAINER), None)
-        gc.collect()
+        release_memory()
     return seg, spleen_mask, info
 
 
