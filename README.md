@@ -1,17 +1,19 @@
-# Liver HU: automatic 3-circle liver attenuation from CT
+# Liver HU: automatic liver (3-circle) and spleen attenuation from CT
 
-Upload a CT scan and get the Hounsfield-unit (HU) values a reader would measure with three
-circular ROIs:
+Upload a CT scan and get the Hounsfield-unit (HU) values a reader would measure with
+circular ROIs, three in the liver and one in the spleen:
 
 | ROI | Where | Rule |
 |---|---|---|
 | **LL** | Left lobe | inside Couinaud segments 2/3, **left of the falciform ligament** (≥ 10 mm from it) |
 | **RL1** | Right lobe, upper | inside segments 7/8, right of the ligament |
 | **RL2** | Right lobe, lower | inside segments 5/6, ≥ 30 mm below RL1 |
+| **SPL** | Spleen | inside the spleen, middle part top to bottom, ≥ 5 mm from its edge |
 
 For each circle: **mean, SD, min, max (and median) HU, area (cm²), diameter**, slice position
 (z, mm) and DICOM image number, plus a **QA picture** showing where every circle went.
-Results download as Excel/CSV, one row per scan.
+Also **liver − spleen** (liver attenuation index) and **liver / spleen** ratio, using the mean
+of the 3 liver circles. Results download as Excel/CSV, one row per scan.
 
 > Research use only, not for clinical diagnosis. Look at the QA image of every case.
 
@@ -22,6 +24,7 @@ Results download as Excel/CSV, one row per scan.
 2. **AI outlining**: [TotalSegmentator](https://github.com/wasserth/TotalSegmentator)
    (trained on real CT scans) finds the liver with its 6 mm model, then outlines the
    8 Couinaud segments with its `liver_segments` model on the liver region only.
+   The spleen is outlined by TotalSegmentator's 1.5 mm organ model, run on the spleen region only.
 3. **Falciform ligament**: estimated on every slice as the boundary between segments 2/3
    and segment 4, the umbilical fissure where the ligament runs.
 4. **Circle placement**: each circle sits fully inside its target segments, ≥ 5 mm from the
@@ -82,8 +85,9 @@ writes `liver_hu_results.xlsx/.csv` and one folder per case with `qa.png` and `r
 ## Output columns
 
 `LL_mean_HU, LL_SD_HU, LL_min_HU, LL_max_HU, LL_area_cm2, LL_diameter_mm, LL_z_mm,
-LL_image_no, LL_segment, LL_side_of_ligament` (same for `RL1_…`, `RL2_…`), then
-`liver_mean_HU_3ROI`, `right_lobe_mean_HU`, `liver_volume_mL`, `series_description`,
+LL_image_no, LL_segment, LL_side_of_ligament` (same for `RL1_…`, `RL2_…` and the spleen
+`SPL_…`), then `liver_mean_HU_3ROI`, `right_lobe_mean_HU`, `spleen_mean_HU`,
+`liver_minus_spleen_HU`, `liver_spleen_ratio`, `liver_volume_mL`, `spleen_volume_mL`, `series_description`,
 `slice_thickness_mm`, `kVp`, `contrast_agent_tag`, `study_key`, `flags`, settings and
 software versions. SD is the sample SD (n − 1).
 

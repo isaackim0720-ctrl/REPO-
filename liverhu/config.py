@@ -23,6 +23,9 @@ class Settings:
     ll_window: tuple = (0.25, 0.75)          # segments 2/3
     rl_top_window: tuple = (0.60, 0.85)      # right lobe, upper ROI (RL1)
     rl_bottom_window: tuple = (0.15, 0.40)   # right lobe, lower ROI (RL2)
+    spleen_window: tuple = (0.25, 0.75)      # spleen ROI: middle part of the spleen
+    # Also place one circle in the spleen (mean/SD/min/max) and report liver-spleen metrics.
+    measure_spleen: bool = True
     # RL2 must be at least this far (cranio-caudally) below RL1.
     min_rl_separation_mm: float = 30.0
     # When a DICOM study has several series, prefer slice thickness closest to this.

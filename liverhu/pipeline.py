@@ -11,10 +11,10 @@ import numpy as np
 
 from . import __version__
 from .config import Settings
-from .roi import place_rois_with_stats, ROI_SPECS
+from .roi import place_rois_with_stats, place_spleen_roi, ROI_SPECS, SPLEEN_SPEC
 from .scanio import CaseInput, load_case
 
-ROI_KEYS = [s.key for s in ROI_SPECS]
+ROI_KEYS = [s.key for s in ROI_SPECS] + [SPLEEN_SPEC.key]
 
 
 def _versions() -> dict:
@@ -28,10 +28,22 @@ def _versions() -> dict:
     return out
 
 
-def _flags(rois, meta, liver_touch, liver_ml, liver_stats=None) -> list[str]:
+def _flags(rois, meta, liver_touch, liver_ml, liver_stats=None, spleen=None, spleen_stats=None) -> list[str]:
     flags = []
     typ = (liver_stats or {}).get("liver_typical_hu")
     thr = (liver_stats or {}).get("outlier_threshold_hu") or 20.0
+    if spleen is not None:
+        if not spleen.placed:
+            flags.append(f"Spleen not measured: {spleen.reason}")
+        else:
+            if spleen.fallback_level > 0:
+                flags.append(f"SPL placed with relaxed rules (level {spleen.fallback_level}) - check image")
+            if spleen.sd_hu is not None and spleen.sd_hu > 25:
+                flags.append(f"SPL SD {spleen.sd_hu:.0f} HU is high (noisy scan or vessel/lesion) - check image")
+            st = (spleen_stats or {}).get("spleen_typical_hu")
+            sthr = (spleen_stats or {}).get("spleen_outlier_threshold_hu") or 20.0
+            if st is not None and abs(spleen.mean_hu - st) > sthr:
+                flags.append(f"SPL mean {spleen.mean_hu:.0f} HU differs from the typical spleen value {st:.0f} HU - check image")
     for r in rois:
         if not r.placed:
             flags.append(f"{r.key} not placed: {r.reason}")
@@ -68,7 +80,7 @@ def process_case(case: CaseInput, out_dir: Path, settings: Settings, log=print) 
                     "processed_at": dt.datetime.now().isoformat(timespec="seconds"),
                     "settings": settings.to_dict(), "software": _versions()}
     try:
-        from .segment import segment_liver
+        from .segment import segment_liver_and_spleen
         from .qa import render_qa
         log(f"[{case.case_id}] loading scan")
         img, meta = load_case(case)
@@ -78,7 +90,8 @@ def process_case(case: CaseInput, out_dir: Path, settings: Settings, log=print) 
         result["input"] = {k: v for k, v in meta.items()}
         result["input"]["other_series"] = case.other_series
         log(f"[{case.case_id}] segmenting liver ({vol.shape}, voxel {np.round(spacing, 2).tolist()} mm)")
-        seg, seg_info = segment_liver(vol, spacing, log=lambda m: log(f"[{case.case_id}] {m}"))
+        seg, spleen_mask, seg_info = segment_liver_and_spleen(
+            vol, spacing, log=lambda m: log(f"[{case.case_id}] {m}"), spleen=settings.measure_spleen)
         voxel_ml = float(np.prod(spacing)) / 1000.0
         counts = np.bincount(seg.ravel(), minlength=9)
         liver_ml = float(counts[1:].sum() * voxel_ml)
@@ -86,18 +99,30 @@ def process_case(case: CaseInput, out_dir: Path, settings: Settings, log=print) 
         liver_touch = bool(len(zs) and (zs.min() == 0 or zs.max() == seg.shape[2] - 1))
         log(f"[{case.case_id}] placing ROIs")
         rois, liver_stats = place_rois_with_stats(vol, seg, spacing, img.affine, settings)
+        spleen, spleen_stats = None, {}
+        if settings.measure_spleen:
+            spleen, spleen_stats = place_spleen_roi(vol, spleen_mask, spacing, img.affine, settings)
         if slice_positions:
             zpos = np.array([p[0] for p in slice_positions])
-            for r in rois:
+            for r in rois + ([spleen] if spleen is not None else []):
                 if r.placed:
                     i = int(np.argmin(np.abs(zpos - r.z_mm)))
                     if abs(zpos[i] - r.z_mm) < 0.6 * spacing[2]:
                         r.dicom_instance = slice_positions[i][1]
         placed = [r for r in rois if r.placed]
+        liver_mean = float(np.mean([r.mean_hu for r in placed])) if placed else None
+        spleen_mean = spleen.mean_hu if spleen is not None and spleen.placed else None
         result.update(
             status="ok" if len(placed) == len(rois) else ("partial" if placed else "failed"),
-            rois=[r.as_dict() for r in rois],
-            liver_mean_hu_3roi=float(np.mean([r.mean_hu for r in placed])) if placed else None,
+            rois=[r.as_dict() for r in rois] + ([spleen.as_dict()] if spleen is not None else []),
+            liver_mean_hu_3roi=liver_mean,
+            spleen_mean_hu=spleen_mean,
+            spleen_typical_hu=spleen_stats.get("spleen_typical_hu"),
+            spleen_volume_ml=(round(float(spleen_mask.sum()) * float(np.prod(spacing)) / 1000.0, 1)
+                              if spleen_mask is not None else None),
+            # liver attenuation index (L - S) and liver-to-spleen ratio (L / S), using the 3-ROI liver mean
+            liver_minus_spleen_hu=(liver_mean - spleen_mean) if liver_mean is not None and spleen_mean is not None else None,
+            liver_spleen_ratio=(liver_mean / spleen_mean) if liver_mean is not None and spleen_mean is not None and spleen_mean > 1.0 else None,
             right_lobe_mean_hu=(float(np.mean([r.mean_hu for r in placed if r.key != "LL"]))
                                 if any(r.key != "LL" for r in placed) else None),
             liver_typical_hu=liver_stats.get("liver_typical_hu"),
@@ -107,16 +132,22 @@ def process_case(case: CaseInput, out_dir: Path, settings: Settings, log=print) 
             liver_fully_covered=not liver_touch,
             segmentation=seg_info,
         )
-        result["flags"] = _flags(rois, result["input"], liver_touch, liver_ml, liver_stats)
+        result["flags"] = _flags(rois, result["input"], liver_touch, liver_ml, liver_stats, spleen, spleen_stats)
         if not placed:
             result["error"] = "No ROI could be placed"
         log(f"[{case.case_id}] drawing QA image")
-        render_qa(vol, seg, rois, spacing, out_dir / "qa.png",
-                  title=f"{case.case_id}   liver mean (3 ROIs) {result['liver_mean_hu_3roi']:.1f} HU"
-                  if placed else case.case_id)
+        title = case.case_id
+        if placed:
+            title += f"   liver mean (3 ROIs) {liver_mean:.1f} HU"
+        if spleen_mean is not None:
+            title += f"   spleen {spleen_mean:.1f} HU"
+        render_qa(vol, seg, rois, spacing, out_dir / "qa.png", title=title,
+                  spleen_mask=spleen_mask, spleen_roi=spleen, summary=result)
         if settings.save_segmentation:
             import nibabel as nib
             nib.save(nib.Nifti1Image(seg, img.affine), out_dir / "liver_segments.nii.gz")
+            if spleen_mask is not None:
+                nib.save(nib.Nifti1Image(spleen_mask.astype(np.uint8), img.affine), out_dir / "spleen.nii.gz")
     except Exception as e:  # report, don't crash the batch/server
         result["error"] = f"{type(e).__name__}: {e}"
         result["traceback"] = traceback.format_exc(limit=8)
@@ -158,7 +189,11 @@ def flatten(result: dict) -> dict:
         "liver_mean_HU_3ROI": _r(result.get("liver_mean_hu_3roi")),
         "right_lobe_mean_HU": _r(result.get("right_lobe_mean_hu")),
         "liver_typical_HU": _r(result.get("liver_typical_hu")),
+        "spleen_mean_HU": _r(result.get("spleen_mean_hu")),
+        "liver_minus_spleen_HU": _r(result.get("liver_minus_spleen_hu")),
+        "liver_spleen_ratio": _r(result.get("liver_spleen_ratio"), 3),
         "liver_volume_mL": result.get("liver_volume_ml"),
+        "spleen_volume_mL": result.get("spleen_volume_ml"),
         "series_description": inp.get("series_description"),
         "slice_thickness_mm": inp.get("slice_thickness_mm"),
         "kVp": inp.get("kvp"),

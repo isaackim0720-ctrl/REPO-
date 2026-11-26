@@ -54,6 +54,8 @@ ROI_SPECS = (
     RoiSpec("RL1", "Right lobe 1 (upper)", (7, 8), RIGHT_LOBE, RIGHT_LOBE, "rl_top_window", "right"),
     RoiSpec("RL2", "Right lobe 2 (lower)", (5, 6), RIGHT_LOBE, RIGHT_LOBE, "rl_bottom_window", "right"),
 )
+# The spleen ROI works on a spleen mask (label 1), with no ligament rule.
+SPLEEN_SPEC = RoiSpec("SPL", "Spleen", (1,), (1,), (1,), "spleen_window", "none")
 
 
 @dataclass
@@ -198,7 +200,7 @@ def _search(ct, seg, spacing, kernel, radius, labels, side, zrange, edge_margin,
         use_global = False
     ref = g_mode if use_global else region_median
     thr = max(settings.outlier_min_hu, 3.0 * (g_rsd if np.isfinite(g_rsd) else 10.0))
-    other_labels = RIGHT_OF_LIGAMENT if side == "left" else LEFT_OF_LIGAMENT
+    other_labels = {"left": RIGHT_OF_LIGAMENT, "right": LEFT_OF_LIGAMENT}.get(side, ())
     best = None
     for z in range(z0, z1 + 1):
         seg2d = seg[:, :, z]
@@ -209,8 +211,8 @@ def _search(ct, seg, spacing, kernel, radius, labels, side, zrange, edge_margin,
         valid = d_reg >= radius + edge_margin
         if not valid.any():
             continue
-        other = np.isin(seg2d, other_labels)
-        if other.any():
+        other = np.isin(seg2d, other_labels) if other_labels else None
+        if other is not None and other.any():
             d_other = ndimage.distance_transform_edt(~other, sampling=(sx, sy))
             valid &= d_other >= radius + lig_margin
             if not valid.any():
@@ -249,20 +251,25 @@ def _measure(ct, seg, spacing, affine, kernel, radius, spec, found, fallback_lev
     d_liver = ndimage.distance_transform_edt(liver2d, sampling=(sx, sy))
     edge = float(d_liver[x, y] - radius)
 
-    pts, _ = _ligament_near(seg, z, max_dz=int(math.ceil(10.0 / sz)))
-    lig_dist, side_found = float("nan"), "unknown"
-    if len(pts):
-        dmm = np.sqrt(((pts[:, 0] - x) * sx) ** 2 + ((pts[:, 1] - y) * sy) ** 2)
-        lig_dist = float(dmm.min() - radius)
-        near_row = pts[np.abs(pts[:, 1] - y) * sy <= 15.0]
-        ref_pts = near_row if len(near_row) else pts
-        lig_x = float(np.median(ref_pts[:, 0]))
-        side_found = "left" if x < lig_x else "right"
     center_label = int(seg[x, y, z])
-    label_side = "left" if center_label in LEFT_OF_LIGAMENT else (
-        "right" if center_label in RIGHT_OF_LIGAMENT else "unknown")
-    side = side_found if side_found != "unknown" else label_side
-    side_ok = (label_side == spec.side) and (side_found in (spec.side, "unknown"))
+    lig_dist = float("nan")
+    if spec.side == "none":          # spleen: no falciform-ligament rule
+        side, side_ok = "n/a", True
+        center_label, labs = 0, []
+    else:
+        pts, _ = _ligament_near(seg, z, max_dz=int(math.ceil(10.0 / sz)))
+        side_found = "unknown"
+        if len(pts):
+            dmm = np.sqrt(((pts[:, 0] - x) * sx) ** 2 + ((pts[:, 1] - y) * sy) ** 2)
+            lig_dist = float(dmm.min() - radius)
+            near_row = pts[np.abs(pts[:, 1] - y) * sy <= 15.0]
+            ref_pts = near_row if len(near_row) else pts
+            lig_x = float(np.median(ref_pts[:, 0]))
+            side_found = "left" if x < lig_x else "right"
+        label_side = "left" if center_label in LEFT_OF_LIGAMENT else (
+            "right" if center_label in RIGHT_OF_LIGAMENT else "unknown")
+        side = side_found if side_found != "unknown" else label_side
+        side_ok = (label_side == spec.side) and (side_found in (spec.side, "unknown"))
 
     return RoiResult(
         key=spec.key, name=spec.name, placed=True,
@@ -350,3 +357,43 @@ def place_rois_with_stats(ct, seg, spacing, affine, settings: Settings):
              "liver_typical_sd": None if not np.isfinite(g_rsd) else round(g_rsd, 1),
              "outlier_threshold_hu": round(max(settings.outlier_min_hu, 3.0 * (g_rsd if np.isfinite(g_rsd) else 10.0)), 1)}
     return results, stats
+
+
+def place_spleen_roi(ct, spleen_mask, spacing, affine, settings: Settings) -> tuple[RoiResult, dict]:
+    """One circle in the spleen: fully inside it, away from its edge, on the most uniform
+    tissue near the spleen's typical HU (avoids vessels at the hilum, cysts, artefacts)."""
+    spec = SPLEEN_SPEC
+    if spleen_mask is None or not np.any(spleen_mask):
+        return RoiResult(spec.key, spec.name, False, "spleen not found in scan"), {}
+    spacing = tuple(float(s) for s in spacing)
+    sx, sy, _ = spacing
+    radius = settings.roi_diameter_mm / 2.0
+    kernel = disk_kernel(radius, sx, sy)
+    reach = radius + settings.edge_margin_mm + 5.0
+    crop = _bbox(spleen_mask, (int(math.ceil(reach / sx)) + 2, int(math.ceil(reach / sy)) + 2, 1))
+    ct_c = np.asarray(ct[crop], dtype=np.float32)
+    seg_c = np.asarray(spleen_mask[crop], dtype=np.uint8)
+    offset = np.array([c.start for c in crop])
+    aff_c = affine.copy()
+    aff_c[:3, 3] = affine[:3, :3] @ offset + affine[:3, 3]
+    g_mode, g_rsd, smooth3 = liver_typical_hu(ct_c, seg_c, spacing)   # same method, on the spleen
+    glob = (g_mode, g_rsd, smooth3)
+    E, m = settings.edge_margin_mm, settings.max_outlier_fraction
+    levels = [(E, 0.0, m, True, True), (E / 2, 0.0, m, True, True), (E / 2, 1.0, 0.15, True, True),
+              (E / 2, 0.0, 1.0, False, False)]
+    for lvl, (edge_m, widen, out_frac, use_global, use_out) in enumerate(levels):
+        f0, f1 = settings.spleen_window
+        frac = (max(0.0, f0 - widen), min(1.0, f1 + widen)) if widen < 1.0 else (0.05, 0.95)
+        zr = _z_window(seg_c, spec.labels, frac)
+        if zr is None:
+            break
+        found = _search(ct_c, seg_c, spacing, kernel, radius, spec.labels, spec.side, zr,
+                        edge_m, 0.0, out_frac, settings, glob, use_global, use_out)
+        if found:
+            res = _measure(ct_c, seg_c, spacing, aff_c, kernel, radius, spec, found, lvl, settings)
+            res.center_voxel = tuple(int(v + o) for v, o in zip(res.center_voxel, offset))
+            res.slice_index = res.center_voxel[2]
+            stats = {"spleen_typical_hu": None if not np.isfinite(g_mode) else round(g_mode, 1),
+                     "spleen_outlier_threshold_hu": round(max(settings.outlier_min_hu, 3.0 * (g_rsd if np.isfinite(g_rsd) else 10.0)), 1)}
+            return res, stats
+    return RoiResult(spec.key, spec.name, False, "spleen too small for the circle"), {}

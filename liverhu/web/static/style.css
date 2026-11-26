@@ -1,7 +1,7 @@
 :root {
   --bg: #f6f7f9; --card: #ffffff; --ink: #1d2330; --muted: #5d6677; --line: #e2e5eb;
   --accent: #1f6feb; --accent-ink: #ffffff; --ok: #1a7f37; --warn: #9a6700; --warn-bg: #fff8c5;
-  --bad: #cf222e; --ll: #0891b2; --rl1: #c026d3; --rl2: #d97706;
+  --bad: #cf222e; --ll: #0891b2; --rl1: #c026d3; --rl2: #d97706; --spl: #16a34a;
 }
 @media (prefers-color-scheme: dark) {
   :root { --bg: #0f1218; --card: #171b23; --ink: #e6e9ef; --muted: #9aa3b2; --line: #2a303b;
@@ -47,6 +47,7 @@ th { font-size: 12px; text-transform: uppercase; letter-spacing: .03em; color: v
 .case { display: grid; grid-template-columns: minmax(260px, 420px) 1fr; gap: 20px; }
 @media (max-width: 760px) { .case { grid-template-columns: 1fr; } }
 .case img { width: 100%; border-radius: 8px; background: #000; cursor: zoom-in; }
+.roi-spl { color: var(--spl); font-weight: 700; }
 .roi-ll { color: var(--ll); font-weight: 700; } .roi-rl1 { color: var(--rl1); font-weight: 700; } .roi-rl2 { color: var(--rl2); font-weight: 700; }
 .flags { margin: 10px 0 0; padding: 8px 12px; background: var(--warn-bg); color: var(--warn); border-radius: 6px; font-size: 13px; }
 .flags li { margin-left: 16px; }

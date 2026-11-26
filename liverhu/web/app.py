@@ -39,9 +39,11 @@ def _summary(row: dict) -> dict:
            "step": row.get("current_step") or "", "seconds": row.get("seconds"),
            "error": res.get("error"), "flags": res.get("flags", []),
            "liver_mean": res.get("liver_mean_hu_3roi"), "has_qa": False,
+           "spleen_mean": res.get("spleen_mean_hu"),
+           "l_minus_s": res.get("liver_minus_spleen_hu"), "l_s_ratio": res.get("liver_spleen_ratio"),
            "series": (res.get("input") or {}).get("series_description"),
            "slice_mm": (res.get("input") or {}).get("slice_thickness_mm")}
-    for k in ("LL", "RL1", "RL2"):
+    for k in ("LL", "RL1", "RL2", "SPL"):
         r = rois.get(k) or {}
         out[k] = {f: r.get(f) for f in ("placed", "mean_hu", "sd_hu", "min_hu", "max_hu", "area_cm2",
                                         "diameter_mm", "z_mm", "dicom_instance", "segment_at_center",

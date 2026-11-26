@@ -128,6 +128,31 @@ def test_region_that_differs_everywhere_is_still_measured():
     assert r.fallback_level == 4
 
 
+def test_spleen_roi_inside_spleen_avoiding_hilar_vessel():
+    from liverhu.roi import place_spleen_roi
+    rng = np.random.default_rng(11)
+    shape, spacing = (200, 160, 60), (0.8, 0.8, 2.5)
+    X, Y, Z = np.meshgrid(*(np.arange(n) for n in shape), indexing="ij")
+    spleen = ((X - 40) / 30.0) ** 2 + ((Y - 60) / 45.0) ** 2 + ((Z - 30) / 22.0) ** 2 <= 1   # patient-left, posterior
+    ct = np.full(shape, -100.0, np.float32)
+    ct[spleen] = 45.0 + rng.normal(0, 8, spleen.sum())
+    hilum = spleen & (np.hypot(X - 55, Y - 75) < 8)        # bright vessel through the spleen
+    ct[hilum] = 170.0
+    res, stats = place_spleen_roi(ct, spleen, spacing, np.diag([*spacing, 1.0]), Settings())
+    assert res.placed and res.key == "SPL" and res.side_of_ligament == "n/a" and res.side_ok
+    x, y, z = res.center_voxel
+    assert spleen[x, y, z]
+    assert abs(res.mean_hu - 45.0) < 4 and res.max_hu < 120
+    assert res.edge_distance_mm >= Settings().edge_margin_mm - 1.0
+    assert abs(stats["spleen_typical_hu"] - 45.0) < 3
+
+
+def test_spleen_missing_is_reported_not_crash():
+    from liverhu.roi import place_spleen_roi
+    res, _ = place_spleen_roi(np.zeros((20, 20, 10), np.float32), None, (1, 1, 1), np.eye(4), Settings())
+    assert not res.placed and "not found" in res.reason
+
+
 def test_anisotropic_pixels_give_true_circle_area():
     k = disk_kernel(7.5, 0.6, 0.9)
     area = k.sum() * 0.6 * 0.9

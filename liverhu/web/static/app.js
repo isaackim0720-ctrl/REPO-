@@ -137,19 +137,21 @@ async function delJob(id) {
 }
 
 // ---------- job page ----------
-const ROIS = [["LL", "Left lobe", "roi-ll"], ["RL1", "Right lobe 1 (upper)", "roi-rl1"], ["RL2", "Right lobe 2 (lower)", "roi-rl2"]];
+const ROIS = [["LL", "Left lobe", "roi-ll"], ["RL1", "Right lobe 1 (upper)", "roi-rl1"], ["RL2", "Right lobe 2 (lower)", "roi-rl2"], ["SPL", "Spleen", "roi-spl"]];
 
 function caseCard(c) {
   const done = ["ok", "partial", "failed"].includes(c.status);
   const rows = ROIS.map(([k, name, cls]) => {
     const r = c[k] || {};
     if (!done) return "";
+    if (r.placed === undefined || r.placed === null) return "";   // e.g. spleen not measured in older results
     if (!r.placed) return `<tr><td class="${cls}">${k}</td><td colspan="7" class="error">not placed</td></tr>`;
+    const where = k === "SPL" ? "spleen" : `seg ${esc(r.segment_at_center)} · ${esc(r.side_of_ligament)}${r.side_ok ? "" : " ⚠"}`;
     return `<tr><td class="${cls}" title="${esc(name)}">${k}</td>
       <td class="num">${fmt(r.mean_hu)}</td><td class="num">${fmt(r.sd_hu)}</td>
       <td class="num">${fmt(r.min_hu, 0)}</td><td class="num">${fmt(r.max_hu, 0)}</td>
       <td class="num">${fmt(r.area_cm2, 2)}</td><td class="num small">${fmt(r.z_mm)}${r.dicom_instance ? ` (#${r.dicom_instance})` : ""}</td>
-      <td class="small">seg ${esc(r.segment_at_center)} · ${esc(r.side_of_ligament)}${r.side_ok ? "" : " ⚠"}</td></tr>`;
+      <td class="small">${where}</td></tr>`;
   }).join("");
   const flags = (c.flags || []).length ? `<ul class="flags">${c.flags.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>` : "";
   const img = c.has_qa ? `<img src="/cases/${c.id}/qa.png" alt="QA image for ${esc(c.case_id)}" onclick="openImg(this.src)">`
@@ -160,7 +162,7 @@ function caseCard(c) {
       <span><span class="badge ${esc(c.status)}">${esc(status)}</span>
       ${c.seconds ? `<span class="small muted">${mins(c.seconds)}</span>` : ""}</span></div>
     <div class="case"><div>${img}</div><div>
-      ${done && c.status !== "failed" ? `<p class="small muted">Liver mean of 3 circles: <b>${fmt(c.liver_mean)} HU</b> · series: ${esc(c.series || "?")} · slice ${fmt(c.slice_mm, 2)} mm</p>` : ""}
+      ${done && c.status !== "failed" ? `<p class="small muted">Liver mean of 3 circles: <b>${fmt(c.liver_mean)} HU</b>${c.spleen_mean !== null && c.spleen_mean !== undefined ? ` · spleen <b>${fmt(c.spleen_mean)} HU</b> · liver − spleen <b>${fmt(c.l_minus_s)} HU</b> · liver/spleen <b>${fmt(c.l_s_ratio, 2)}</b>` : ""} · series: ${esc(c.series || "?")} · slice ${fmt(c.slice_mm, 2)} mm</p>` : ""}
       ${c.error ? `<p class="error small">${esc(c.error)}</p>` : ""}
       ${rows ? `<div class="table-wrap"><table><thead><tr><th>ROI</th><th class="num">Mean HU</th><th class="num">SD</th><th class="num">Min</th><th class="num">Max</th><th class="num">Area cm²</th><th class="num">z mm (image)</th><th>Where</th></tr></thead><tbody>${rows}</tbody></table></div>` : ""}
       ${flags}
