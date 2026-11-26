@@ -6,12 +6,18 @@ after every scan and a crash cannot take the website down).
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
 
 def main(argv=None) -> int:
     argv = argv if argv is not None else sys.argv[1:]
+    if hasattr(os, "nice"):          # macOS/Linux: lower priority (Windows: set by the server)
+        try:
+            os.nice(10)
+        except OSError:
+            pass
     job = json.loads(Path(argv[0]).read_text())
     from .config import Settings
     from .pipeline import process_case

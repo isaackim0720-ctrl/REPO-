@@ -153,9 +153,11 @@ class Worker(threading.Thread):
                    PYTHONPATH=pkg_root + (os.pathsep + os.environ["PYTHONPATH"] if os.environ.get("PYTHONPATH") else ""))
         log_path = d / "log.txt"
         with open(log_path, "w", encoding="utf-8") as log:
+            # below-normal priority keeps the computer responsive while a scan is measured
+            extra = {"creationflags": subprocess.BELOW_NORMAL_PRIORITY_CLASS} if os.name == "nt" else {}
             proc = subprocess.Popen([sys.executable, "-m", "liverhu.worker", str(d / "case.json")],
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env,
-                                    encoding="utf-8", errors="replace", bufsize=1)
+                                    encoding="utf-8", errors="replace", bufsize=1, **extra)
             self.current_proc = proc
             try:
                 for line in proc.stdout:
