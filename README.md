@@ -40,13 +40,18 @@ Requirements: Windows 10/11, macOS or Linux; **8 GB RAM** (the AI step needs abo
 so close other programs on this computer); about 6 GB disk; internet for the install.
 
 **Windows**
-1. Install Python 3.12 from <https://www.python.org/downloads/> and tick **Add python.exe to PATH**.
+1. Install Python from <https://www.python.org/downloads/> and tick **Add python.exe to PATH**.
+   Any recent version works: if yours is too new for the medical-imaging packages (e.g. 3.15),
+   the installer downloads a private Python 3.12 for this program and leaves yours unchanged.
 2. Download this folder (on GitHub: *Code → Download ZIP*) and unzip it, e.g. to `C:\LiverHU`.
 3. Double-click `scripts\install_windows.bat`, which takes 10–20 min.
 4. Double-click `scripts\start_windows.bat`. The first time, it asks you to choose the website password.
    If Windows Firewall asks, allow access on **private networks**.
 
-**macOS / Linux**: run `scripts/install_mac_linux.sh`, then `scripts/start_mac_linux.sh`.
+**macOS / Linux**: the `.bat` files are Windows-only. Install Python (step 1), download and
+unzip (step 2; a Mac unzips automatically), then in Finder right-click the folder →
+**New Terminal at Folder** and run `bash scripts/install_mac_linux.sh`, then
+`bash scripts/start_mac_linux.sh`.
 
 ## Use it
 

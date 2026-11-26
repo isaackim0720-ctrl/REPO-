@@ -14,27 +14,54 @@ echo   The computer may be slower meanwhile. Do NOT close this window.
 echo ==================================================================
 echo.
 
-REM ---- find Python 3 (py launcher first, then a working "python") ----
+REM ---- an install folder made with an unsupported Python is removed and redone ----
+if not exist ".venv\Scripts\python.exe" goto :findpy
+".venv\Scripts\python.exe" -c "import sys; sys.exit(0 if (3, 10) <= sys.version_info[:2] <= (3, 14) else 1)"
+if not errorlevel 1 goto :venvready
+echo Removing an earlier install made with an unsupported Python version...
+rmdir /s /q .venv
+
+:findpy
+REM ---- medical-imaging packages need Python 3.10 - 3.14; prefer 3.12 ----
 set "PY="
-py -3.12 --version >nul 2>nul
-if not errorlevel 1 set "PY=py -3.12"
-if not defined PY (
-  py -3 --version >nul 2>nul
-  if not errorlevel 1 set "PY=py -3"
+for %%V in (3.12 3.13 3.11 3.14) do (
+  if not defined PY (
+    py -%%V --version >nul 2>nul
+    if not errorlevel 1 set "PY=py -%%V"
+  )
 )
-if not defined PY (
-  python --version >nul 2>nul
-  if not errorlevel 1 set "PY=python"
-)
-if not defined PY goto :nopython
+if defined PY goto :havepy
+
+REM ---- no suitable Python: use any Python to fetch a private Python 3.12 ----
+set "BASE="
+py -3 --version >nul 2>nul
+if not errorlevel 1 set "BASE=py -3"
+if defined BASE goto :bootstrap
+python --version >nul 2>nul
+if not errorlevel 1 set "BASE=python"
+if not defined BASE goto :nopython
+
+:bootstrap
+echo Your Python does not work with some medical-imaging packages.
+echo Downloading a private copy of Python 3.12 just for this program...
+echo Your own Python is not changed.
+%BASE% -m venv .bootstrap
+".bootstrap\Scripts\python.exe" -m pip install -q --upgrade pip uv
+".bootstrap\Scripts\python.exe" -m uv venv --seed --python 3.12 .venv
+goto :venvcheck
+
+:havepy
 echo Using:
 %PY% --version
-echo.
+%PY% -m venv .venv
 
-echo Step 1 of 3: creating the install folder ...
-if not exist ".venv\Scripts\python.exe" %PY% -m venv .venv
+:venvcheck
 if not exist ".venv\Scripts\python.exe" goto :venvfail
 
+:venvready
+echo.
+echo Step 1 of 3: install folder ready.
+".venv\Scripts\python.exe" --version
 echo.
 echo Step 2 of 3: downloading and installing packages - the long step ...
 start "" /BELOWNORMAL /WAIT /B ".venv\Scripts\python.exe" -m pip install --upgrade pip
@@ -64,14 +91,14 @@ exit /b 1
 
 :nopython
 echo Python was not found.
-echo Install Python 3.12 from https://www.python.org/downloads/
+echo Install Python from https://www.python.org/downloads/
 echo On the FIRST installer screen tick "Add python.exe to PATH", then run this file again.
 pause
 exit /b 1
 
 :venvfail
 echo Could not create the install folder (.venv).
-echo Make sure the folder is not read-only and there is free disk space (about 6 GB).
+echo Check the internet connection and that there is free disk space (about 6 GB).
 pause
 exit /b 1
 
