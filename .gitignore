@@ -1,0 +1,12 @@
+# Never commit scans, results or the website password hash
+liverhu_data/
+*.nii
+*.nii.gz
+*.dcm
+*.zip
+results/
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/

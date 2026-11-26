@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Liver HU{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="top">
+    <a href="/" class="brand">Liver HU <span>automatic 3-circle liver attenuation</span></a>
+    <nav>
+      <a href="/">Uploads</a>
+      <a href="/download/results.xlsx">All results (Excel)</a>
+      <a href="/about">How it works</a>
+    </nav>
+    <span class="who" title="Signed in name">{{ user }}</span>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <footer>Research use only, not for clinical diagnosis. Check the QA image of every case. &middot; v{{ version }}</footer>
+  <script src="/static/app.js"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

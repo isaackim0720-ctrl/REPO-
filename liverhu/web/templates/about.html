@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}How it works · Liver HU{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>How the measurement works</h1>
+  <ol>
+    <li><b>Find the scan.</b> In each uploaded study the axial CT series is chosen automatically, preferring a non-contrast series and a slice thickness near {{ defaults.preferred_slice_mm }} mm. Which series was used is shown with every result.</li>
+    <li><b>Outline the liver.</b> The AI model <i>TotalSegmentator</i>, trained on real CT scans, outlines the liver and its 8 Couinaud segments. A coarse 6 mm model first finds the liver, then the liver-segment model runs on that region only, so an 8 GB lab PC can run it.</li>
+    <li><b>Find the falciform ligament.</b> The ligament runs in the fissure between segments 2/3 (left lateral section) and segment 4. On every slice that boundary is marked (yellow dots in the QA image).</li>
+    <li><b>Place three circles</b> ({{ defaults.roi_diameter_mm }} mm diameter by default) on single axial slices:
+      <ul>
+        <li><span class="roi-ll">LL</span>: left lobe, inside segments 2/3, so <b>left of the falciform ligament</b>, at least {{ defaults.ligament_margin_mm }} mm from it.</li>
+        <li><span class="roi-rl1">RL1</span>: right lobe, <b>upper</b> part (segments 7/8), right of the ligament.</li>
+        <li><span class="roi-rl2">RL2</span>: right lobe, <b>lower</b> part (segments 5/6), at least {{ defaults.min_rl_separation_mm }} mm below RL1.</li>
+      </ul>
+      Each circle stays at least {{ defaults.edge_margin_mm }} mm inside the liver and its segment. Within those limits it goes where the tissue is most uniform (lowest SD, closest to that region's typical HU), so vessels, lesions and artefacts are avoided the way a careful reader would.</li>
+    <li><b>Measure</b> mean, SD, min, max and median HU of the pixels inside each circle, the circle's area (cm²) and diameter, its slice position (z, mm), and the DICOM image number, so you can find the slice in your own viewer.</li>
+  </ol>
+  <h2>Check every case</h2>
+  <p>Open the QA image. Each circle must be inside liver tissue, LL left of the yellow ligament line, RL1 above RL2, and none should sit on a vessel. Cases with anything unusual carry an amber flag (for example a contrast-enhanced series, a high SD, or a liver not fully covered by the scan).</p>
+  <h2>Notes for the study</h2>
+  <ul>
+    <li>HU cut-offs for fatty liver from the literature refer to <b>non-contrast</b> CT. For example, liver ≤ 40 HU, or a 48 HU threshold that was 100% specific for moderate-to-severe steatosis. Contrast-enhanced values are not comparable.</li>
+    <li>Use the same settings (circle size, margins) for every scan in a study. The settings used are saved in each result row.</li>
+    <li>Before relying on the automatic values, compare them with manual measurements on a subset of your scans (e.g. intraclass correlation, Bland-Altman).</li>
+  </ul>
+  <h2>References</h2>
+  <ul class="small">
+    <li>Wasserthal J, et al. TotalSegmentator: robust segmentation of 104 anatomic structures in CT images. Radiology: Artificial Intelligence 2023. <a href="https://doi.org/10.1148/ryai.230024">doi:10.1148/ryai.230024</a></li>
+    <li>Kodama Y, et al. Comparison of CT methods for determining the fat content of the liver. AJR 2007. <a href="https://doi.org/10.2214/AJR.06.0992">doi:10.2214/AJR.06.0992</a></li>
+    <li>Boyce CJ, et al. Hepatic steatosis in asymptomatic adults identified by unenhanced low-dose CT. AJR 2010. <a href="https://doi.org/10.2214/AJR.09.2590">doi:10.2214/AJR.09.2590</a></li>
+    <li>Pickhardt PJ, et al. Specificity of unenhanced CT for non-invasive diagnosis of hepatic steatosis. Eur Radiol 2012. <a href="https://doi.org/10.1007/s00330-011-2349-2">doi:10.1007/s00330-011-2349-2</a></li>
+  </ul>
+</section>
+{% endblock %}
