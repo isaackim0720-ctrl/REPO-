@@ -181,6 +181,11 @@ def discover_cases(root: Path, label: str = "", preferred_slice_mm: float = 3.0,
 
     dicom_candidates = []
     for p in sorted(files):
+        rel_parts = p.relative_to(base).parts[:-1] if base in p.parents else ()
+        if p.name.startswith("."):
+            continue   # hidden/metadata files such as macOS "._name.nii.gz"
+        if any(part.lower().startswith("label") for part in rel_parts):
+            continue   # segmentation masks shipped with public datasets (labelsTr/...), not CT scans
         if is_nifti(p):
             stem = p.name[:-7] if p.name.lower().endswith(".nii.gz") else p.stem
             cases.append(CaseInput(unique(stem if not label else f"{label}_{stem}"), "nifti", path=str(p)))

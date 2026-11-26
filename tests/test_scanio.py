@@ -75,6 +75,19 @@ def test_nifti_and_zip(tmp_path):
     assert img.shape == vol.shape
 
 
+def test_public_dataset_layout_skips_labels_and_hidden_files(tmp_path):
+    vol = _vol().astype(np.int16)
+    aff = np.diag([0.8, 0.8, 2.0, 1])
+    (tmp_path / "Task09_Spleen" / "imagesTr").mkdir(parents=True)
+    (tmp_path / "Task09_Spleen" / "labelsTr").mkdir(parents=True)
+    nib.save(nib.Nifti1Image(vol, aff), tmp_path / "Task09_Spleen" / "imagesTr" / "spleen_2.nii.gz")
+    nib.save(nib.Nifti1Image((vol > 0).astype(np.uint8), aff), tmp_path / "Task09_Spleen" / "labelsTr" / "spleen_2.nii.gz")
+    (tmp_path / "Task09_Spleen" / "imagesTr" / "._spleen_2.nii.gz").write_bytes(b"\0" * 10)
+    cases, _ = discover_cases(tmp_path)
+    assert [c.case_id for c in cases] == ["spleen_2"]
+    assert "imagesTr" in cases[0].path
+
+
 def test_zip_path_traversal_refused(tmp_path):
     z = tmp_path / "evil.zip"
     with zipfile.ZipFile(z, "w") as zf:
