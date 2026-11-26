@@ -75,6 +75,13 @@ results only if you tick that option. Each study also gets a pseudonymous `study
 
 Change the password: `python -m liverhu set-password` (with the server stopped).
 
+## Updating to a new version
+
+macOS / Linux: in Terminal, inside the installed folder, run `bash scripts/update_mac_linux.sh`,
+then restart the website. This keeps the install, the password and all results.
+Windows: download the new ZIP, unzip it, and copy its `liverhu` folder over the old one
+(keep your `.venv` and `liverhu_data`), then restart `start_windows.bat`.
+
 ## Batch mode (no website)
 
 ```
