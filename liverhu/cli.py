@@ -53,7 +53,8 @@ def _cmd_serve(a) -> int:
         auth.first_time_password(data)
     from .web.app import create_app
     app = create_app(data, keep_uploads=a.keep_uploads)
-    print(f"\nLiver HU website running. On this computer open: http://localhost:{a.port}")
+    from . import __version__
+    print(f"\nLiver HU website v{__version__} (liver + spleen) running. On this computer open: http://localhost:{a.port}")
     print(f"Others on the lab network open: http://<this-computer's-name-or-IP>:{a.port}")
     print("Leave this window open while people use the website. Press Ctrl+C to stop.\n")
     uvicorn.run(app, host=a.host, port=a.port, log_level="warning")
