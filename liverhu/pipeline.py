@@ -89,7 +89,7 @@ def process_case(case: CaseInput, out_dir: Path, settings: Settings, log=print) 
         slice_positions = meta.pop("slice_positions", None)
         result["input"] = {k: v for k, v in meta.items()}
         result["input"]["other_series"] = case.other_series
-        log(f"[{case.case_id}] segmenting liver ({vol.shape}, voxel {np.round(spacing, 2).tolist()} mm)")
+        log(f"[{case.case_id}] step 1 of 4: finding the liver and spleen ({vol.shape[2]} slices)")
         seg, spleen_mask, seg_info = segment_liver_and_spleen(
             vol, spacing, log=lambda m: log(f"[{case.case_id}] {m}"), spleen=settings.measure_spleen)
         voxel_ml = float(np.prod(spacing)) / 1000.0
@@ -97,7 +97,7 @@ def process_case(case: CaseInput, out_dir: Path, settings: Settings, log=print) 
         liver_ml = float(counts[1:].sum() * voxel_ml)
         zs = np.nonzero((seg > 0).any(axis=(0, 1)))[0]
         liver_touch = bool(len(zs) and (zs.min() == 0 or zs.max() == seg.shape[2] - 1))
-        log(f"[{case.case_id}] placing ROIs")
+        log(f"[{case.case_id}] step 4 of 4: placing the circles and measuring")
         rois, liver_stats = place_rois_with_stats(vol, seg, spacing, img.affine, settings)
         spleen, spleen_stats = None, {}
         if settings.measure_spleen:
@@ -135,7 +135,7 @@ def process_case(case: CaseInput, out_dir: Path, settings: Settings, log=print) 
         result["flags"] = _flags(rois, result["input"], liver_touch, liver_ml, liver_stats, spleen, spleen_stats)
         if not placed:
             result["error"] = "No ROI could be placed"
-        log(f"[{case.case_id}] drawing QA image")
+        log(f"[{case.case_id}] step 4 of 4: drawing the check image")
         title = case.case_id
         if placed:
             title += f"   liver mean (3 ROIs) {liver_mean:.1f} HU"

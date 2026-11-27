@@ -248,7 +248,7 @@ def segment_liver_and_spleen(vol: np.ndarray, spacing, log=print, spleen: bool =
     if box is None:
         raise RuntimeError("Could not find the liver in this scan (is it an abdominal CT?)")
     info["crop_shape"] = [int(b.stop - b.start) for b in box]
-    log(f"liver located in {info['t_locate_s']} s; crop {info['crop_shape']}")
+    log(f"step 2 of 4: outlining the 8 liver segments (the longest step, usually 1-6 min; liver found in {info['t_locate_s']} s)")
     _PREDICTORS.pop((COARSE_TASK, COARSE_TRAINER), None)   # free the coarse model
     release_memory()
     t1 = time.time()
@@ -257,7 +257,7 @@ def segment_liver_and_spleen(vol: np.ndarray, spacing, log=print, spleen: bool =
     seg[box] = seg_crop
     del seg_crop
     info["t_segments_s"] = round(time.time() - t1, 1)
-    log(f"liver segments done in {info['t_segments_s']} s")
+    log(f"step 3 of 4: outlining the spleen (liver segments took {info['t_segments_s']} s)")
     _PREDICTORS.pop((LIVER_SEGMENTS_TASK, LIVER_SEGMENTS_TRAINER), None)
     release_memory()
 
@@ -278,7 +278,7 @@ def segment_liver_and_spleen(vol: np.ndarray, spacing, log=print, spleen: bool =
         else:
             info["spleen"] = "not found by the organ model"
         info["t_spleen_s"] = round(time.time() - t2, 1)
-        log(f"spleen done in {info['t_spleen_s']} s")
+        log(f"spleen outlined in {info['t_spleen_s']} s")
         _PREDICTORS.pop((ORGANS_TASK, ORGANS_TRAINER), None)
         release_memory()
     return seg, spleen_mask, info

@@ -37,6 +37,7 @@ def _summary(row: dict) -> dict:
     rois = {r["key"]: r for r in res.get("rois", [])}
     out = {"id": row["id"], "case_id": row["case_id"], "status": row["status"],
            "step": row.get("current_step") or "", "seconds": row.get("seconds"),
+           "started_at": row.get("started_at"),
            "error": res.get("error"), "flags": res.get("flags", []),
            "liver_mean": res.get("liver_mean_hu_3roi"), "has_qa": False,
            "spleen_mean": res.get("spleen_mean_hu"),

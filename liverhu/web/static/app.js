@@ -156,7 +156,8 @@ function caseCard(c) {
   const flags = (c.flags || []).length ? `<ul class="flags">${c.flags.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>` : "";
   const img = c.has_qa ? `<img src="/cases/${c.id}/qa.png" alt="QA image for ${esc(c.case_id)}" onclick="openImg(this.src)">`
     : `<div class="muted small">${done ? "No image" : "Image appears when the scan is finished."}</div>`;
-  const status = c.status === "running" ? `running: ${esc(c.step)}` : c.status;
+  const elapsed = c.status === "running" && c.started_at ? Math.max(0, (Date.now() - Date.parse(c.started_at)) / 1000) : null;
+  const status = c.status === "running" ? `${esc(c.step || "starting")}${elapsed !== null ? ` · ${mins(elapsed)} so far` : ""}` : c.status;
   return `<section class="card"><div class="row" style="justify-content:space-between;align-items:center">
       <h2>${esc(c.case_id)}</h2>
       <span><span class="badge ${esc(c.status)}">${esc(status)}</span>
@@ -186,7 +187,7 @@ async function refreshJob(id) {
   if (d.cases_ahead) p += ` · ${d.cases_ahead} scan(s) from earlier uploads first`;
   $("progress").textContent = p;
   $("message").textContent = j.message || "";
-  const sig = JSON.stringify(d.cases.map((c) => [c.id, c.status, c.step, c.has_qa]));
+  const sig = JSON.stringify(d.cases.map((c) => [c.id, c.status, c.step, c.has_qa, c.status === "running" ? Date.now() : 0]));
   if (sig !== lastSig) { $("cases").innerHTML = d.cases.map(caseCard).join(""); lastSig = sig; }
   return ["done", "failed", "cancelled"].includes(j.status);
 }
