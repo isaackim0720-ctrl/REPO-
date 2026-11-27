@@ -68,7 +68,12 @@ def _cmd_serve(a) -> int:
     from . import __version__
     mode = " [low-memory mode]" if os.environ.get("LIVERHU_LOW_MEMORY") == "1" else ""
     ips = tls.local_ips() or ["<this-computer's-IP>"]
-    print(f"\nLiver HU website v{__version__} (liver + spleen){mode} running.")
+    try:
+        from .segment import device_name, _HW
+        hw = _HW.get(device_name(), device_name())
+    except Exception:
+        hw = "CPU"
+    print(f"\nLiver HU website v{__version__} (liver + spleen){mode} running. AI runs on: {hw}")
     print(f"  On this computer open:      http://localhost:{a.port}")
     for ip in ips:
         print(f"  Others on the network open: http://{ip}:{a.port}")

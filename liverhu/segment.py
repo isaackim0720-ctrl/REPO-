@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import math
 import os
+
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 import time
 
 import numpy as np
@@ -88,13 +90,33 @@ def tile_in_use() -> str:
     return t + (" (low-memory)" if LOW_MEMORY else "")
 
 
+_FORCE_CPU = False
+_HW = {"cpu": "CPU", "mps": "Apple GPU", "cuda": "NVIDIA GPU"}
+
+
+def device_name() -> str:
+    """Which hardware the AI models will run on: "cuda" (NVIDIA GPU), "mps" (Apple-chip
+    GPU, much faster than the CPU for these 3D models on a Mac) or "cpu".
+    LIVERHU_DEVICE=cpu|mps|cuda forces a choice."""
+    import torch
+    forced = os.environ.get("LIVERHU_DEVICE", "").lower()
+    if _FORCE_CPU or forced == "cpu":
+        return "cpu"
+    if forced in ("cuda", "mps"):
+        return forced
+    if torch.cuda.is_available():
+        return "cuda"
+    mps = getattr(torch.backends, "mps", None)
+    if mps is not None and mps.is_available():
+        return "mps"
+    return "cpu"
+
+
 def _device():
     import torch
-    if torch.cuda.is_available():
-        return torch.device("cuda")
     n = max(1, os.cpu_count() or 1)
-    torch.set_num_threads(min(n, 4) if LOW_MEMORY else n)
-    return torch.device("cpu")
+    torch.set_num_threads(min(n, 4) if LOW_MEMORY else n)   # also used for CPU-side steps
+    return torch.device(device_name())
 
 
 def download_models() -> None:
@@ -139,10 +161,23 @@ def _predictor(task_id: int, trainer: str, step_size: float):
 
 
 def _predict(pred, vol_xyz: np.ndarray, spacing_xyz) -> np.ndarray:
-    """vol in canonical (x, y, z) order -> label map in the same order/shape."""
+    """vol in canonical (x, y, z) order -> label map in the same order/shape.
+    If the Apple GPU (mps) fails for any reason, the same model is re-run on the CPU."""
+    global _FORCE_CPU
     data = np.ascontiguousarray(vol_xyz.transpose(2, 1, 0)[None], dtype=np.float32)
     props = {"spacing": [float(spacing_xyz[2]), float(spacing_xyz[1]), float(spacing_xyz[0])]}
-    seg = pred.predict_single_npy_array(data, props, None, None, False)
+    try:
+        seg = pred.predict_single_npy_array(data, props, None, None, False)
+    except Exception as e:
+        if getattr(pred, "device", None) is None or pred.device.type != "mps":
+            raise
+        print(f"Apple GPU (mps) failed ({type(e).__name__}: {e}); continuing on the CPU", flush=True)
+        _FORCE_CPU = True
+        import torch
+        pred.device = torch.device("cpu")
+        pred.network.to(pred.device)
+        pred.list_of_parameters = [pred.network.state_dict()]
+        seg = pred.predict_single_npy_array(data, props, None, None, False)
     return np.asarray(seg, dtype=np.uint8).transpose(2, 1, 0)
 
 
@@ -241,14 +276,14 @@ def segment_liver_and_spleen(vol: np.ndarray, spacing, log=print, spleen: bool =
     """
     import gc
     t0 = time.time()
-    info: dict = {"tile": tile_in_use()}
+    info: dict = {"tile": tile_in_use(), "device": device_name()}
     boxes = locate_organs(vol, spacing)
     box = boxes["liver"]
     info["t_locate_s"] = round(time.time() - t0, 1)
     if box is None:
         raise RuntimeError("Could not find the liver in this scan (is it an abdominal CT?)")
     info["crop_shape"] = [int(b.stop - b.start) for b in box]
-    log(f"step 2 of 4: outlining the 8 liver segments (the longest step, usually 1-6 min; liver found in {info['t_locate_s']} s)")
+    log(f"step 2 of 4: outlining the 8 liver segments on the {_HW.get(info['device'], info['device'])} (the longest step; liver found in {info['t_locate_s']} s)")
     _PREDICTORS.pop((COARSE_TASK, COARSE_TRAINER), None)   # free the coarse model
     release_memory()
     t1 = time.time()
