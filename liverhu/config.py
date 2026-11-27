@@ -23,6 +23,11 @@ class Settings:
     ll_window: tuple = (0.25, 0.75)          # segments 2/3
     rl_top_window: tuple = (0.60, 0.85)      # right lobe, upper ROI (RL1)
     rl_bottom_window: tuple = (0.15, 0.40)   # right lobe, lower ROI (RL2)
+    # Couinaud segments for the right-lobe circles (first choice; RL1 falls back to 7/8,
+    # then the whole right lobe, only if the circle does not fit). Segment 8 = anterior
+    # upper right lobe, 7 = posterior upper, 5 = anterior lower, 6 = posterior lower.
+    rl1_segments: tuple = (8,)
+    rl2_segments: tuple = (5, 6)
     spleen_window: tuple = (0.25, 0.75)      # spleen ROI: middle part of the spleen
     # Also place one circle in the spleen (mean/SD/min/max) and report liver-spleen metrics.
     measure_spleen: bool = True

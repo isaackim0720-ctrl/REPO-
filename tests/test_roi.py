@@ -58,7 +58,7 @@ def test_three_rois_on_correct_side_of_ligament_and_levels():
     # Right lobe ROIs: right of the ligament, RL1 upper (7/8), RL2 lower (5/6)
     for r in (rl1, rl2):
         assert r.center_voxel[0] >= info["x_s4"] and r.side_of_ligament == "right" and r.side_ok
-    assert set(rl1.segments_in_roi) <= {7, 8} and set(rl2.segments_in_roi) <= {5, 6}
+    assert set(rl1.segments_in_roi) <= {8} and set(rl2.segments_in_roi) <= {5, 6}   # RL1: anterior upper (seg 8)
     assert rl1.z_mm > rl2.z_mm
     assert rl1.z_mm - rl2.z_mm >= Settings().min_rl_separation_mm - 1e-6
     # Values come from the right tissue
@@ -178,3 +178,12 @@ def test_settings_roundtrip():
     s2 = Settings.from_dict(s.to_dict())
     assert s2 == s
     assert Settings.from_dict({"roi_diameter_mm": "12", "save_segmentation": "on"}).roi_diameter_mm == 12.0
+
+
+def test_right_lobe_segments_are_configurable():
+    ct, seg, aff, _ = make_phantom(seed=13)
+    res = place_rois(ct, seg, (0.8, 0.8, 2.5), aff, Settings(rl1_segments=(7,), rl2_segments=(5,)))
+    assert roi(res, "RL1").segment_at_center == 7 and set(roi(res, "RL1").segments_in_roi) <= {7}
+    assert set(roi(res, "RL2").segments_in_roi) <= {5}
+    s2 = Settings.from_dict(Settings(rl1_segments=(8,)).to_dict())
+    assert tuple(int(v) for v in s2.rl1_segments) == (8,)

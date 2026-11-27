@@ -15,7 +15,7 @@ Liver anatomy used (Couinaud segments from the segmentation model):
 
 ROIs (defaults; all distances/windows configurable in Settings):
   LL  - left lobe, inside segments 2/3, left of the ligament
-  RL1 - right lobe upper ("near top"), inside segments 7/8
+  RL1 - right lobe upper ("near top"), inside segment 8 (anterior; falls back to 7/8)
   RL2 - right lobe lower ("near bottom"), inside segments 5/6
 Within each target region the circle is placed on the axial slice/position where the
 tissue is most homogeneous (lowest SD, close to the regional median HU), which keeps
@@ -51,7 +51,7 @@ class RoiSpec:
 
 ROI_SPECS = (
     RoiSpec("LL", "Left lobe", (2, 3), (2, 3), (2, 3), "ll_window", "left"),
-    RoiSpec("RL1", "Right lobe 1 (upper)", (7, 8), RIGHT_LOBE, RIGHT_LOBE, "rl_top_window", "right"),
+    RoiSpec("RL1", "Right lobe 1 (upper)", (8,), (7, 8), RIGHT_LOBE, "rl_top_window", "right"),
     RoiSpec("RL2", "Right lobe 2 (lower)", (5, 6), RIGHT_LOBE, RIGHT_LOBE, "rl_bottom_window", "right"),
 )
 # The spleen ROI works on a spleen mask (label 1), with no ligament rule.
@@ -302,6 +302,20 @@ def _measure(ct, seg, spacing, affine, kernel, radius, spec, found, fallback_lev
     )
 
 
+def _specs_for(settings: Settings):
+    """ROI specs with the right-lobe segments taken from the settings."""
+    import dataclasses
+    out = []
+    for spec in ROI_SPECS:
+        if spec.key == "RL1" and tuple(settings.rl1_segments) != spec.labels:
+            spec = dataclasses.replace(spec, labels=tuple(int(v) for v in settings.rl1_segments),
+                                       fallback_labels=RIGHT_LOBE)
+        elif spec.key == "RL2" and tuple(settings.rl2_segments) != spec.labels:
+            spec = dataclasses.replace(spec, labels=tuple(int(v) for v in settings.rl2_segments))
+        out.append(spec)
+    return out
+
+
 def place_rois(ct: np.ndarray, seg: np.ndarray, spacing, affine, settings: Settings) -> list[RoiResult]:
     """Place LL, RL1, RL2 circles. ct: HU array, seg: Couinaud labels 0-8 (same shape)."""
     return place_rois_with_stats(ct, seg, spacing, affine, settings)[0]
@@ -342,7 +356,7 @@ def place_rois_with_stats(ct, seg, spacing, affine, settings: Settings):
     ]
     results: list[RoiResult] = []
     rl1_z = None
-    for spec in ROI_SPECS:
+    for spec in _specs_for(settings):
         found, used_level = None, 0
         for lvl, (lab_attr, edge_m, lig_m, widen, out_frac, use_global, use_out) in enumerate(levels):
             labels = getattr(spec, lab_attr)

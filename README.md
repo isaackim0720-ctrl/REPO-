@@ -6,7 +6,7 @@ circular ROIs, three in the liver and one in the spleen:
 | ROI | Where | Rule |
 |---|---|---|
 | **LL** | Left lobe | inside Couinaud segments 2/3, **left of the falciform ligament** (≥ 10 mm from it) |
-| **RL1** | Right lobe, upper | inside segments 7/8, right of the ligament |
+| **RL1** | Right lobe, upper | inside segment 8 (front of the upper right lobe; falls back to 7/8), right of the ligament |
 | **RL2** | Right lobe, lower | inside segments 5/6, ≥ 30 mm below RL1 |
 | **SPL** | Spleen | inside the spleen, middle part top to bottom, ≥ 5 mm from its edge |
 

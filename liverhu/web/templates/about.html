@@ -10,7 +10,7 @@
     <li><b>Place three circles</b> ({{ defaults.roi_diameter_mm }} mm diameter by default) on single axial slices:
       <ul>
         <li><span class="roi-ll">LL</span>: left lobe, inside segments 2/3, so <b>left of the falciform ligament</b>, at least {{ defaults.ligament_margin_mm }} mm from it.</li>
-        <li><span class="roi-rl1">RL1</span>: right lobe, <b>upper</b> part (segments 7/8), right of the ligament.</li>
+        <li><span class="roi-rl1">RL1</span>: right lobe, <b>upper front</b> part (segment 8; segment 7 only if 8 is too small), right of the ligament.</li>
         <li><span class="roi-rl2">RL2</span>: right lobe, <b>lower</b> part (segments 5/6), at least {{ defaults.min_rl_separation_mm }} mm below RL1.</li>
         <li><span class="roi-spl">SPL</span>: one circle in the <b>spleen</b> (outlined by TotalSegmentator's organ model), in its middle part top to bottom, judged against the spleen's own typical HU.</li>
       </ul>
