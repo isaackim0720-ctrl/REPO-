@@ -1,2 +1,2 @@
 """Automated liver CT attenuation (HU) ROI measurement."""
-__version__ = "0.3.2"   # .2: RL1 in segment 8; .1: Apple GPU; 0.3: circle editor
+__version__ = "0.4.0"   # 0.4: all liver circles on one slice (RL1 front, RL2 back), spleen same slice if possible

@@ -48,7 +48,7 @@ def _orient(ax, top="A"):
     ax.set_xticks([]); ax.set_yticks([])
 
 
-def _axial_panel(ax, ct, r, spacing, contours, crop_mask, show_ligament_from=None):
+def _axial_panel(ax, ct, r, spacing, contours, crop_mask, show_ligament_from=None, others=()):
     sx, sy, _ = spacing
     X, Y, _ = ct.shape
     ax.set_facecolor("black")
@@ -72,6 +72,11 @@ def _axial_panel(ax, ct, r, spacing, contours, crop_mask, show_ligament_from=Non
         if len(pts):
             ax.scatter((X - 1 - pts[:, 0]) * sx, (Y - 1 - pts[:, 1]) * sy, s=7, c="yellow",
                        marker="s", linewidths=0, zorder=5)
+    for o in others:                 # other circles on this same slice, dashed
+        if o is not None and o.placed and o.key != r.key and o.center_voxel and o.center_voxel[2] == z:
+            ox, oy = (X - 1 - o.center_voxel[0]) * sx, (Y - 1 - o.center_voxel[1]) * sy
+            ax.add_patch(Circle((ox, oy), o.diameter_mm / 2, fill=False, ec=COLORS[o.key], lw=1.0, ls="--"))
+            ax.text(ox, oy, o.key, color=COLORS[o.key], ha="center", va="center", fontsize=7, clip_on=True)
     cxm, cym = (X - 1 - x) * sx, (Y - 1 - y) * sy
     rad = r.diameter_mm / 2
     ax.add_patch(Circle((cxm, cym), rad, fill=False, ec=COLORS[r.key], lw=2.0))
@@ -105,12 +110,14 @@ def render_qa(ct, seg, rois, spacing, out_path: Path, title: str = "",
     def liver_contours(z):
         return [(np.isin(seg[:, :, z], labels), color) for labels, color, _ in REGION_STYLE]
 
+    everyone = list(rois) + [spleen_roi]
     for r in rois:
-        _axial_panel(axes[PANEL[r.key]], ct, r, (sx, sy, sz), liver_contours, liver3, show_ligament_from=seg)
+        _axial_panel(axes[PANEL[r.key]], ct, r, (sx, sy, sz), liver_contours, liver3, show_ligament_from=seg,
+                     others=everyone)
 
     spl_mask = spleen_mask if spleen_mask is not None else np.zeros(ct.shape, bool)
     _axial_panel(axes[PANEL["SPL"]], ct, spleen_roi, (sx, sy, sz),
-                 lambda z: [(spl_mask[:, :, z], SPLEEN_COLOR)], spl_mask)
+                 lambda z: [(spl_mask[:, :, z], SPLEEN_COLOR)], spl_mask, others=everyone)
 
     # coronal overview through the liver ROIs, with all ROI levels
     ax = axes[1, 1]

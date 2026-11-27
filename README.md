@@ -3,12 +3,19 @@
 Upload a CT scan and get the Hounsfield-unit (HU) values a reader would measure with
 circular ROIs, three in the liver and one in the spleen:
 
+All three liver circles go on **one axial slice**: the slice (in the middle part of the liver)
+where all three fit in the most uniform tissue.
+
 | ROI | Where | Rule |
 |---|---|---|
 | **LL** | Left lobe | inside Couinaud segments 2/3, **left of the falciform ligament** (≥ 10 mm from it) |
-| **RL1** | Right lobe, upper | inside segment 8 (front of the upper right lobe; falls back to 7/8), right of the ligament |
-| **RL2** | Right lobe, lower | inside segments 5/6, ≥ 30 mm below RL1 |
-| **SPL** | Spleen | inside the spleen, middle part top to bottom, ≥ 5 mm from its edge |
+| **RL1** | Right lobe, front (top of the image) | segments 5/8, right of the ligament |
+| **RL2** | Right lobe, back (bottom of the image) | segments 6/7, below RL1 in the image, not overlapping it |
+| **SPL** | Spleen | on the same slice if the spleen fits there, otherwise the spleen's best slice; ≥ 5 mm from its edge |
+
+(If the three circles cannot fit on one slice, they are placed on separate slices and the case is
+flagged. `single_slice: False` in `liverhu/config.py` switches to the older separate-slices method:
+RL1 upper right lobe in segment 8, RL2 lower right lobe.)
 
 For each circle: **mean, SD, min, max (and median) HU, area (cm²), diameter**, slice position
 (z, mm) and DICOM image number, plus a **QA picture** showing where every circle went.

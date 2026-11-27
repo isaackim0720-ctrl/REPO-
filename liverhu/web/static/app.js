@@ -138,7 +138,7 @@ async function delJob(id) {
 }
 
 // ---------- job page ----------
-const ROIS = [["LL", "Left lobe", "roi-ll"], ["RL1", "Right lobe 1 (upper)", "roi-rl1"], ["RL2", "Right lobe 2 (lower)", "roi-rl2"], ["SPL", "Spleen", "roi-spl"]];
+const ROIS = [["LL", "Left lobe", "roi-ll"], ["RL1", "Right lobe 1 (front)", "roi-rl1"], ["RL2", "Right lobe 2 (back)", "roi-rl2"], ["SPL", "Spleen", "roi-spl"]];
 
 function caseCard(c) {
   const done = ["ok", "partial", "failed"].includes(c.status);

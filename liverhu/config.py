@@ -28,6 +28,14 @@ class Settings:
     # upper right lobe, 7 = posterior upper, 5 = anterior lower, 6 = posterior lower.
     rl1_segments: tuple = (8,)
     rl2_segments: tuple = (5, 6)
+    # One-slice mode (default): LL, RL1 and RL2 on the SAME axial slice - the slice where all
+    # three fit in the most uniform tissue. RL1 = front of the right lobe (top of the image,
+    # segments 5/8), RL2 = back (bottom of the image, segments 6/7). The spleen circle uses
+    # that slice too when the spleen fits there, otherwise its own best slice.
+    single_slice: bool = True
+    one_slice_window: tuple = (0.20, 0.80)   # slices considered: middle part of the liver
+    one_slice_rl1_segments: tuple = (5, 8)
+    one_slice_rl2_segments: tuple = (6, 7)
     spleen_window: tuple = (0.25, 0.75)      # spleen ROI: middle part of the spleen
     # Also place one circle in the spleen (mean/SD/min/max) and report liver-spleen metrics.
     measure_spleen: bool = True

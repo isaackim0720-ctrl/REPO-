@@ -101,7 +101,8 @@ def process_case(case: CaseInput, out_dir: Path, settings: Settings, log=print) 
         rois, liver_stats = place_rois_with_stats(vol, seg, spacing, img.affine, settings)
         spleen, spleen_stats = None, {}
         if settings.measure_spleen:
-            spleen, spleen_stats = place_spleen_roi(vol, spleen_mask, spacing, img.affine, settings)
+            prefer_z = rois[0].center_voxel[2] if liver_stats.get("single_slice") and rois[0].placed else None
+            spleen, spleen_stats = place_spleen_roi(vol, spleen_mask, spacing, img.affine, settings, prefer_z=prefer_z)
         if slice_positions:
             zpos = np.array([p[0] for p in slice_positions])
             for r in rois + ([spleen] if spleen is not None else []):
@@ -125,6 +126,8 @@ def process_case(case: CaseInput, out_dir: Path, settings: Settings, log=print) 
             liver_spleen_ratio=(liver_mean / spleen_mean) if liver_mean is not None and spleen_mean is not None and spleen_mean > 1.0 else None,
             right_lobe_mean_hu=(float(np.mean([r.mean_hu for r in placed if r.key != "LL"]))
                                 if any(r.key != "LL" for r in placed) else None),
+            liver_circles_one_slice=bool(liver_stats.get("single_slice")),
+            spleen_same_slice=(spleen_stats.get("same_slice") if spleen is not None and spleen.placed else None),
             liver_typical_hu=liver_stats.get("liver_typical_hu"),
             liver_typical_sd=liver_stats.get("liver_typical_sd"),
             liver_volume_ml=round(liver_ml, 1),
@@ -133,6 +136,8 @@ def process_case(case: CaseInput, out_dir: Path, settings: Settings, log=print) 
             segmentation=seg_info,
         )
         result["flags"] = _flags(rois, result["input"], liver_touch, liver_ml, liver_stats, spleen, spleen_stats)
+        if settings.single_slice and not liver_stats.get("single_slice") and placed:
+            result["flags"].append("Could not fit all 3 liver circles on one slice - they are on different slices")
         if not placed:
             result["error"] = "No ROI could be placed"
         log(f"[{case.case_id}] step 4 of 4: drawing the check image")
@@ -194,6 +199,8 @@ def flatten(result: dict) -> dict:
         "liver_mean_HU_3ROI": _r(result.get("liver_mean_hu_3roi")),
         "right_lobe_mean_HU": _r(result.get("right_lobe_mean_hu")),
         "liver_typical_HU": _r(result.get("liver_typical_hu")),
+        "liver_circles_on_one_slice": {True: "yes", False: "no"}.get(result.get("liver_circles_one_slice"), ""),
+        "spleen_on_same_slice": {True: "yes", False: "no"}.get(result.get("spleen_same_slice"), ""),
         "spleen_mean_HU": _r(result.get("spleen_mean_hu")),
         "liver_minus_spleen_HU": _r(result.get("liver_minus_spleen_hu")),
         "liver_spleen_ratio": _r(result.get("liver_spleen_ratio"), 3),

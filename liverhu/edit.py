@@ -23,7 +23,8 @@ from .roi import (LEFT_OF_LIGAMENT, ROI_SPECS, SPLEEN_SPEC, RoiResult, _measure,
 
 EDIT_FILE = "edit_data.npz"
 SPLEEN_LABEL = 9          # in the stored label volume: 1-8 = liver segments, 9 = spleen
-SPECS = {s.key: s for s in ROI_SPECS + (SPLEEN_SPEC,)}
+from .roi import _one_slice_specs  # noqa: E402
+SPECS = {s.key: s for s in tuple(_one_slice_specs(Settings()) if Settings().single_slice else ROI_SPECS) + (SPLEEN_SPEC,)}
 WINDOW = (-160, 240)
 
 

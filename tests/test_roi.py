@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from liverhu.config import Settings
-from liverhu.roi import disk_kernel, ligament_points, place_rois
+from liverhu.roi import disk_kernel, ligament_points, place_rois, place_rois_with_stats
 
 # Region HU values in the phantom (each ROI must recover its own region's value)
 HU_LL, HU_S4, HU_TOP, HU_BOTTOM = 50.0, 55.0, 60.0, 66.0
@@ -44,10 +44,39 @@ def roi(results, key):
     return next(r for r in results if r.key == key)
 
 
+def test_one_slice_all_liver_circles_same_slice_front_and_back():
+    ct, seg, aff, info = make_phantom()
+    res, stats = place_rois_with_stats(ct, seg, (0.8, 0.8, 2.5), aff, Settings())
+    ll, rl1, rl2 = roi(res, "LL"), roi(res, "RL1"), roi(res, "RL2")
+    assert stats["single_slice"] and all(r.placed for r in res)
+    assert ll.center_voxel[2] == rl1.center_voxel[2] == rl2.center_voxel[2] == stats["slice_index"]
+    assert set(ll.segments_in_roi) <= {2, 3} and ll.center_voxel[0] < info["x_lig"] and ll.side_ok
+    assert set(rl1.segments_in_roi) <= {5, 8} and set(rl2.segments_in_roi) <= {6, 7}   # front / back sectors
+    assert rl1.center_voxel[1] > rl2.center_voxel[1]                                      # RL1 above RL2 in the image
+    d = math.hypot((rl1.center_voxel[0] - rl2.center_voxel[0]) * 0.8, (rl1.center_voxel[1] - rl2.center_voxel[1]) * 0.8)
+    assert d >= Settings().roi_diameter_mm                                                # circles do not overlap
+    assert abs(ll.mean_hu - HU_LL) < 4
+    assert min(abs(rl1.mean_hu - v) for v in (HU_TOP, HU_BOTTOM)) < 4
+
+
+def test_spleen_on_liver_slice_when_possible():
+    from liverhu.roi import place_spleen_roi
+    shape, spacing = (200, 160, 60), (0.8, 0.8, 2.5)
+    X, Y, Z = np.meshgrid(*(np.arange(n) for n in shape), indexing="ij")
+    spleen = ((X - 40) / 30.0) ** 2 + ((Y - 60) / 45.0) ** 2 + ((Z - 30) / 22.0) ** 2 <= 1
+    ct = np.where(spleen, 45.0, -100.0).astype(np.float32) + np.random.default_rng(2).normal(0, 5, shape).astype(np.float32) * spleen
+    aff = np.diag([*spacing, 1.0])
+    r, st = place_spleen_roi(ct, spleen, spacing, aff, Settings(), prefer_z=35)
+    assert st["same_slice"] and r.center_voxel[2] == 35
+    r2, st2 = place_spleen_roi(ct, spleen, spacing, aff, Settings(), prefer_z=59)   # spleen not on that slice
+    assert r2.placed and not st2["same_slice"] and r2.center_voxel[2] != 59
+
+
 def test_three_rois_on_correct_side_of_ligament_and_levels():
+    """Separate-slices mode (single_slice=False): RL1 upper (segment 8), RL2 lower."""
     ct, seg, aff, info = make_phantom()
     spacing = (0.8, 0.8, 2.5)
-    res = place_rois(ct, seg, spacing, aff, Settings())
+    res = place_rois(ct, seg, spacing, aff, Settings(single_slice=False))
     ll, rl1, rl2 = roi(res, "LL"), roi(res, "RL1"), roi(res, "RL2")
     assert all(r.placed for r in res)
     # Left lobe ROI: inside segments 2/3, patient-left of the ligament (smaller x)
@@ -97,7 +126,9 @@ def test_avoids_vessel_and_cyst():
     for z in range(shape[2]):
         ct[:, :, z][cyst & np.isin(seg[:, :, z], (2, 3))] = 5.0
     res = place_rois(ct, seg, (0.8, 0.8, 2.5), aff, Settings())
-    assert abs(roi(res, "RL1").mean_hu - HU_TOP) < 4 and roi(res, "RL1").max_hu < 120
+    assert all(r.max_hu < 120 for r in res)
+    res2 = place_rois(ct, seg, (0.8, 0.8, 2.5), aff, Settings(single_slice=False))
+    assert abs(roi(res2, "RL1").mean_hu - HU_TOP) < 4 and roi(res2, "RL1").max_hu < 120
     assert abs(roi(res, "LL").mean_hu - HU_LL) < 4 and roi(res, "LL").min_hu > 15
 
 
@@ -112,9 +143,11 @@ def test_large_lesion_filling_most_of_region_is_avoided():
         lower = np.isin(seg[:, :, z], (5, 6))
         mass = lower & (np.hypot(X - cx, Y - cy) < 0.33 * shape[0])
         ct[:, :, z][mass] = 20.0 + np.random.default_rng(z).normal(0, 8, mass.sum())
-    res = place_rois(ct, seg, (0.8, 0.8, 2.5), aff, Settings())
+    res = place_rois(ct, seg, (0.8, 0.8, 2.5), aff, Settings(single_slice=False))
     rl2 = roi(res, "RL2")
     assert rl2.placed and abs(rl2.mean_hu - HU_BOTTOM) < 6, rl2.mean_hu
+    one = place_rois(ct, seg, (0.8, 0.8, 2.5), aff, Settings())
+    assert all(r.placed and r.mean_hu > 40 for r in one)          # no circle inside the 20 HU mass
 
 
 def test_region_that_differs_everywhere_is_still_measured():
@@ -182,7 +215,7 @@ def test_settings_roundtrip():
 
 def test_right_lobe_segments_are_configurable():
     ct, seg, aff, _ = make_phantom(seed=13)
-    res = place_rois(ct, seg, (0.8, 0.8, 2.5), aff, Settings(rl1_segments=(7,), rl2_segments=(5,)))
+    res = place_rois(ct, seg, (0.8, 0.8, 2.5), aff, Settings(single_slice=False, rl1_segments=(7,), rl2_segments=(5,)))
     assert roi(res, "RL1").segment_at_center == 7 and set(roi(res, "RL1").segments_in_roi) <= {7}
     assert set(roi(res, "RL2").segments_in_roi) <= {5}
     s2 = Settings.from_dict(Settings(rl1_segments=(8,)).to_dict())
