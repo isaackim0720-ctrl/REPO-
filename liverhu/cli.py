@@ -51,14 +51,41 @@ def _cmd_serve(a) -> int:
     data.mkdir(parents=True, exist_ok=True)
     if not auth.has_password(data):
         auth.first_time_password(data)
+    import asyncio
     from .web.app import create_app
+    from .web import tls
     app = create_app(data, keep_uploads=a.keep_uploads)
+    configs = [uvicorn.Config(app, host=a.host, port=a.port, log_level="warning")]
+    https_ok = False
+    if a.https_port:
+        try:
+            cert, key = tls.ensure_cert(data)
+            configs.append(uvicorn.Config(app, host=a.host, port=a.https_port, log_level="warning",
+                                          ssl_certfile=str(cert), ssl_keyfile=str(key)))
+            https_ok = True
+        except Exception as e:   # e.g. 'cryptography' not installed yet: run http only
+            print(f"(https not available: {e}; run the update/install script to enable it)")
     from . import __version__
     mode = " [low-memory mode]" if os.environ.get("LIVERHU_LOW_MEMORY") == "1" else ""
-    print(f"\nLiver HU website v{__version__} (liver + spleen){mode} running. On this computer open: http://localhost:{a.port}")
-    print(f"Others on the lab network open: http://<this-computer's-name-or-IP>:{a.port}")
+    ips = tls.local_ips() or ["<this-computer's-IP>"]
+    print(f"\nLiver HU website v{__version__} (liver + spleen){mode} running.")
+    print(f"  On this computer open:      http://localhost:{a.port}")
+    for ip in ips:
+        print(f"  Others on the network open: http://{ip}:{a.port}")
+        if https_ok:
+            print(f"     or, if their browser insists on a secure connection: https://{ip}:{a.https_port}")
+    if https_ok:
+        print("     (https shows a one-time 'not private' warning: choose Advanced -> Proceed / visit website)")
     print("Leave this window open while people use the website. Press Ctrl+C to stop.\n")
-    uvicorn.run(app, host=a.host, port=a.port, log_level="warning")
+    servers = [uvicorn.Server(c) for c in configs]
+
+    async def _run():
+        await asyncio.gather(*(s.serve() for s in servers))
+    try:
+        asyncio.run(_run())
+    except KeyboardInterrupt:
+        pass
+    print("Website stopped.")
     return 0
 
 
@@ -80,7 +107,9 @@ def main(argv=None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
     sp = sub.add_parser("serve", help="start the private lab website")
     sp.add_argument("--host", default="0.0.0.0", help="0.0.0.0 = reachable from the lab network")
-    sp.add_argument("--port", type=int, default=8000)
+    sp.add_argument("--port", type=int, default=8000, help="plain http port")
+    sp.add_argument("--https-port", type=int, default=8443,
+                    help="also serve https with a self-made certificate on this port (0 = off)")
     sp.add_argument("--data", default=str(DEFAULT_DATA), help="folder for results and settings")
     sp.add_argument("--keep-uploads", action="store_true", help="keep uploaded scans after processing")
     sp.add_argument("--low-memory", action="store_true",

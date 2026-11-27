@@ -60,6 +60,10 @@ unzip (step 2; a Mac unzips automatically), then in Finder right-click the folde
 
 * On the server computer open <http://localhost:8000>. Other lab members open
   `http://<server-address>:8000`; the start window prints the address (e.g. `http://192.168.1.23:8000`).
+* If a device's browser insists on a secure connection ("can't provide a secure connection"),
+  use the **https** address the start window prints, e.g. `https://192.168.1.23:8443`. The first
+  time, the browser warns that the connection is not private (the certificate is self-made):
+  choose **Advanced → Proceed** (Chrome/Edge) or **Show Details → visit this website** (Safari).
 * Log in: **user name = your name** (it is recorded with your uploads), **password = the lab password**.
 * Drag in a folder exported from your scan database (DICOM, any folder layout, many patients
   at once), `.zip` files, or `.nii/.nii.gz`. Each study is measured separately, one at a time,

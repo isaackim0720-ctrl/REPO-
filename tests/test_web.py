@@ -64,3 +64,14 @@ def test_safe_rel():
 def test_short_password_rejected(tmp_path):
     with pytest.raises(ValueError):
         auth.set_password(tmp_path, "short")
+
+
+def test_https_certificate_is_created_once_and_loads(tmp_path):
+    import ssl
+    from liverhu.web import tls
+    cert, key = tls.ensure_cert(tmp_path)
+    assert cert.exists() and key.exists()
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(str(cert), str(key))          # valid pair, usable by the server
+    before = cert.read_bytes()
+    assert tls.ensure_cert(tmp_path)[0].read_bytes() == before   # reused, not regenerated
