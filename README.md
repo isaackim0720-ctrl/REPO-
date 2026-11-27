@@ -44,6 +44,32 @@ Defaults (change on the website under *Advanced*, or in `liverhu/config.py`): ci
 15 mm (1.77 cm²), edge gap 5 mm, ligament gap 10 mm. Use the same settings for every scan in
 a study; they are saved in every result row.
 
+## Automatic checks
+
+Every scan gets a **quality badge** (✓ Good / ⚠ Check / ✕ Poor quality) and, if needed, an
+**Incomplete scan** badge, with the reasons listed. Every circle's **mean HU** gets a **⚠ low** or
+**⚠ high** mark when it is outside the expected range. These also appear in the check image and in
+Excel (`LL_HU_check` …, `quality`, `quality_notes`, `scan_complete`, `completeness_notes`).
+
+* **Contrast phase** is detected first, because normal values differ: from the aorta's HU
+  (≥ 130 HU contrast-enhanced, < 90 HU non-contrast), else the DICOM contrast tag, else the spleen.
+* **Expected mean HU** (change in `liverhu/config.py`):
+
+  | | non-contrast | contrast-enhanced |
+  |---|---|---|
+  | liver circles | 40–80 HU | 60–170 HU |
+  | spleen circle | 30–65 HU | 70–180 HU |
+
+  Non-contrast liver: < 40 HU is the moderate–severe fatty-liver cut-off (Boyce et al., AJR 2010);
+  > 80 HU is about mean + 2 SD of 3,357 adults in the same study (58.8 ± 10.8 HU). The other
+  ranges are rough plausibility ranges. If the phase is uncertain, the widest range is used.
+  A "low" liver value is expected in fatty liver: the mark means *look at it*, not *error*.
+* **Incomplete scan**: liver cut off at the top/bottom of the scan or at the image side, or
+  slices missing from the DICOM series (spleen cut-off is noted too).
+* **Quality**: *poor* if the image is very noisy (circle SD > 40 HU), not in Hounsfield units, or
+  not all liver circles could be placed; *check* if noisy (SD > 25 HU), slices > 5 mm, unusual liver
+  volume, very uneven liver (> 30 % unusual tissue), relaxed placement or no common slice.
+
 ## Install (once, on the lab computer that will run the website)
 
 Requirements: Windows 10/11, macOS or Linux; **8 GB RAM** (the AI step needs about 4 GB free,

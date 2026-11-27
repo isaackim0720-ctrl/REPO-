@@ -1,2 +1,2 @@
 """Automated liver CT attenuation (HU) ROI measurement."""
-__version__ = "0.4.0"   # 0.4: all liver circles on one slice (RL1 front, RL2 back), spleen same slice if possible
+__version__ = "0.5.0"   # 0.5: HU too high/low warnings, completeness and quality checks

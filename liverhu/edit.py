@@ -148,6 +148,9 @@ def recompute_summary(result: dict) -> None:
         result["status"] = "ok"
     elif liver:
         result["status"] = "partial"
+    if result.get("hu_ranges"):
+        from .checks import apply_hu_checks
+        apply_hu_checks(result)
 
 
 def apply_manual(result: dict, new_roi: RoiResult, user: str) -> dict:

@@ -28,6 +28,7 @@ COARSE_TASK = 298                       # TotalSegmentator "total" 6 mm model
 COARSE_TRAINER = "nnUNetTrainer_4000epochs_NoMirroring"
 COARSE_LIVER_LABEL = 5
 COARSE_SPLEEN_LABEL = 1
+COARSE_AORTA_LABEL = 52
 COARSE_SPACING_MM = 6.0
 ORGANS_TASK = 291                       # TotalSegmentator "total" 1.5 mm organs model (spleen = 1)
 ORGANS_TRAINER = "nnUNetTrainerNoMirroring"
@@ -223,9 +224,16 @@ def locate_organs(vol: np.ndarray, spacing, margin_mm: float = 20.0) -> dict:
     pred = _predictor(COARSE_TASK, COARSE_TRAINER, step_size=0.8)
     coarse = _predict(pred, small, small_spacing)
     liver = coarse == COARSE_LIVER_LABEL
+    aorta = coarse == COARSE_AORTA_LABEL
+    aorta_hu = None
+    if aorta.sum() >= 3:      # median blood HU inside the aorta (eroded to avoid the wall)
+        from scipy import ndimage
+        core = ndimage.binary_erosion(aorta)
+        aorta_hu = float(np.median(small[core if core.sum() >= 5 else aorta]))
     return {
         "liver": _box_from_coarse(liver, factors, spacing, vol.shape, margin_mm) if liver.sum() >= 20 else None,
         "spleen": _box_from_coarse(coarse == COARSE_SPLEEN_LABEL, factors, spacing, vol.shape, margin_mm),
+        "aorta_hu": aorta_hu,
     }
 
 
@@ -280,6 +288,7 @@ def segment_liver_and_spleen(vol: np.ndarray, spacing, log=print, spleen: bool =
     boxes = locate_organs(vol, spacing)
     box = boxes["liver"]
     info["t_locate_s"] = round(time.time() - t0, 1)
+    info["aorta_hu"] = None if boxes.get("aorta_hu") is None else round(boxes["aorta_hu"], 1)
     if box is None:
         raise RuntimeError("Could not find the liver in this scan (is it an abdominal CT?)")
     info["crop_shape"] = [int(b.stop - b.start) for b in box]

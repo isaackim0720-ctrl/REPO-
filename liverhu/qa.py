@@ -95,7 +95,8 @@ def _axial_panel(ax, ct, r, spacing, contours, crop_mask, show_ligament_from=Non
     where = ("spleen" if r.key == "SPL" else
              f"segment {r.segment_at_center}   {'LEFT' if r.side_of_ligament == 'left' else 'RIGHT'} of ligament"
              + ("" if r.side_ok else "  ⚠ CHECK SIDE"))
-    txt = (f"mean {_fmt(r.mean_hu)}  SD {_fmt(r.sd_hu)}  min {_fmt(r.min_hu, 0)}  max {_fmt(r.max_hu, 0)} HU\n"
+    warn = {"low": "  (!) LOW", "high": "  (!) HIGH"}.get(getattr(r, "hu_check", "") or "", "")
+    txt = (f"mean {_fmt(r.mean_hu)}{warn}  SD {_fmt(r.sd_hu)}  min {_fmt(r.min_hu, 0)}  max {_fmt(r.max_hu, 0)} HU\n"
            f"area {_fmt(r.area_cm2, 2)} cm²  ({_fmt(r.diameter_mm, 0)} mm)   {where}")
     ax.text(0.5, -0.02, txt, color="white", transform=ax.transAxes, ha="center", va="top", fontsize=9)
 
@@ -155,10 +156,11 @@ def render_qa(ct, seg, rois, spacing, out_path: Path, title: str = "",
     ax = axes[1, 2]
     ax.set_facecolor("black")
     ax.axis("off")
-    lines = [f"{'ROI':<5}{'mean':>8}{'SD':>7}{'min':>6}{'max':>6}{'cm²':>7}"]
+    lines = [f"{'ROI':<5}{'mean':>8}{'':<7}{'SD':>6}{'min':>6}{'max':>6}{'cm²':>7}"]
     for r in list(rois) + ([spleen_roi] if spleen_roi is not None else []):
         if r.placed:
-            lines.append(f"{r.key:<5}{_fmt(r.mean_hu):>8}{_fmt(r.sd_hu):>7}{_fmt(r.min_hu, 0):>6}"
+            w = {"low": "(!)LOW", "high": "(!)HIGH"}.get(getattr(r, "hu_check", "") or "", "")
+            lines.append(f"{r.key:<5}{_fmt(r.mean_hu):>8} {w:<6}{_fmt(r.sd_hu):>6}{_fmt(r.min_hu, 0):>6}"
                          f"{_fmt(r.max_hu, 0):>6}{_fmt(r.area_cm2, 2):>7}")
         else:
             lines.append(f"{r.key:<5}  not placed")
@@ -167,7 +169,12 @@ def render_qa(ct, seg, rois, spacing, out_path: Path, title: str = "",
               f"Spleen               {_fmt(s.get('spleen_mean_hu'))} HU",
               f"Liver - spleen       {_fmt(s.get('liver_minus_spleen_hu'))} HU",
               f"Liver / spleen       {_fmt(s.get('liver_spleen_ratio'), 2)}"]
-    ax.text(0.02, 0.95, "\n".join(lines), color="white", family="monospace", fontsize=11,
+    if s.get("quality"):
+        lines += ["", f"Quality: {s['quality'].upper()}" + ("" if s.get("scan_complete", True) else "   SCAN INCOMPLETE"),
+                  f"Contrast: {s.get('contrast_phase', '?')}"]
+        for note in (s.get("completeness_notes") or []) + (s.get("quality_notes") or []):
+            lines.append("  - " + (note if len(note) <= 44 else note[:43] + "…"))
+    ax.text(0.02, 0.97, "\n".join(lines), color="white", family="monospace", fontsize=10,
             va="top", ha="left", transform=ax.transAxes)
     ax.set_title("Summary (HU)", color="white", fontsize=10)
 

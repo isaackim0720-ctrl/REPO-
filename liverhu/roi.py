@@ -87,6 +87,7 @@ class RoiResult:
     region_median_hu: float = float("nan")
     dicom_instance: int | None = None   # DICOM InstanceNumber of the ROI slice (DICOM input)
     manual: bool = False                # True when a person moved/resized this circle
+    hu_check: str = ""                  # "low" / "high" / "" (mean HU vs expected range)
     edited_by: str = ""
     edited_at: str = ""
 
@@ -464,9 +465,13 @@ def place_rois_with_stats(ct, seg, spacing, affine, settings: Settings):
         # take its most uniform spot, judged against the region's own median (flagged)
         ("labels", E / 2, L / 2, 0.0, 1.0, False, False),
     ]
+    thr_all = max(settings.outlier_min_hu, 3.0 * (g_rsd if np.isfinite(g_rsd) else 10.0))
+    interior = ndimage.binary_erosion(seg_c > 0, iterations=2)
+    out_frac = float(np.mean(np.abs(smooth3[interior] - g_mode) > thr_all)) if interior.any() and np.isfinite(g_mode) else None
     stats = {"liver_typical_hu": None if not np.isfinite(g_mode) else round(g_mode, 1),
              "liver_typical_sd": None if not np.isfinite(g_rsd) else round(g_rsd, 1),
-             "outlier_threshold_hu": round(max(settings.outlier_min_hu, 3.0 * (g_rsd if np.isfinite(g_rsd) else 10.0)), 1),
+             "outlier_threshold_hu": round(thr_all, 1),
+             "liver_outlier_fraction": None if out_frac is None else round(out_frac, 3),
              "single_slice": False}
     if settings.single_slice:
         picked = _one_slice(ct_c, seg_c, spacing, kernel, radius, glob, settings)

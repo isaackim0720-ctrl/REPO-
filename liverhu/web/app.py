@@ -44,13 +44,17 @@ def _summary(row: dict) -> dict:
            "spleen_mean": res.get("spleen_mean_hu"),
            "l_minus_s": res.get("liver_minus_spleen_hu"), "l_s_ratio": res.get("liver_spleen_ratio"),
            "revision": res.get("revision", 0), "editable": bool(res.get("editable")),
+           "quality": res.get("quality"), "quality_notes": res.get("quality_notes") or [],
+           "scan_complete": res.get("scan_complete"), "completeness_notes": res.get("completeness_notes") or [],
+           "contrast_phase": res.get("contrast_phase"), "contrast_reason": res.get("contrast_phase_reason"),
            "series": (res.get("input") or {}).get("series_description"),
            "slice_mm": (res.get("input") or {}).get("slice_thickness_mm")}
     for k in ("LL", "RL1", "RL2", "SPL"):
         r = rois.get(k) or {}
         out[k] = {f: r.get(f) for f in ("placed", "mean_hu", "sd_hu", "min_hu", "max_hu", "area_cm2",
                                         "diameter_mm", "z_mm", "dicom_instance", "segment_at_center",
-                                        "side_of_ligament", "side_ok", "manual", "edited_by")}
+                                        "side_of_ligament", "side_ok", "manual", "edited_by", "hu_check")}
+        out[k]["hu_range"] = (res.get("hu_ranges") or {}).get(k)
     return out
 
 
@@ -266,7 +270,8 @@ def create_app(data: Path, keep_uploads: bool = False, start_worker: bool = True
                         "auto": {k: (r.get("auto") or {}).get(k) for k in editmod.STAT_FIELDS} if r.get("manual") else None,
                         "reason": r.get("reason")})
         return {"available": True, "case_id": row["case_id"], "job_id": row["job_id"],
-                "shape": [X, Y, Z], "spacing": list(ed.spacing), "rois": out}
+                "shape": [X, Y, Z], "spacing": list(ed.spacing), "rois": out,
+                "hu_ranges": res.get("hu_ranges") or {}, "contrast_phase": res.get("contrast_phase")}
 
     @app.get("/cases/{case_id}/slice/{z}.png")
     def edit_slice(case_id: int, z: int, u: str = Depends(user)):

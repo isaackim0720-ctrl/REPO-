@@ -57,17 +57,8 @@ def _flags(rois, meta, liver_touch, liver_ml, liver_stats=None, spleen=None, spl
             flags.append(f"{r.key} placed with relaxed rules (level {r.fallback_level}) - check image")
         if r.sd_hu is not None and r.sd_hu > 25:
             flags.append(f"{r.key} SD {r.sd_hu:.0f} HU is high (noisy scan or vessel/lesion) - check image")
-    if meta.get("contrast_agent_tag"):
-        flags.append("Contrast agent recorded in DICOM: fatty-liver HU cut-offs are for non-contrast CT")
-    st = meta.get("slice_thickness_mm")
-    if st and st > 5.0:
-        flags.append(f"Slice thickness {st} mm > 5 mm")
-    if liver_touch:
-        flags.append("Liver touches the top/bottom of the scan (liver not fully covered)")
-    if liver_ml < 500 or liver_ml > 4500:
-        flags.append(f"Unusual liver volume {liver_ml:.0f} mL - check segmentation")
-    if meta.get("warning_not_hu"):
-        flags.append(meta["warning_not_hu"])
+    # slice thickness, liver coverage, liver volume and non-HU images are reported by the
+    # quality / completeness checks (checks.py) instead of here
     return flags
 
 
@@ -113,6 +104,17 @@ def process_case(case: CaseInput, out_dir: Path, settings: Settings, log=print) 
         placed = [r for r in rois if r.placed]
         liver_mean = float(np.mean([r.mean_hu for r in placed])) if placed else None
         spleen_mean = spleen.mean_hu if spleen is not None and spleen.placed else None
+        # automatic checks: contrast phase -> expected HU ranges; completeness; image quality
+        from . import checks
+        phase, phase_how = checks.contrast_phase(seg_info.get("aorta_hu"), meta.get("contrast_agent_tag") or "",
+                                                 spleen_mean, settings)
+        ranges = checks.hu_ranges(phase, settings)
+        for r in rois + ([spleen] if spleen is not None else []):
+            r.hu_check = checks.check_hu(r.mean_hu, ranges.get(r.key)) if r.placed else ""
+        complete, completeness_notes = checks.completeness(seg, spleen_mask, slice_positions)
+        q_level, q_notes, noise = checks.quality(
+            rois, meta, liver_stats, liver_ml, settings,
+            single_slice_ok=bool(liver_stats.get("single_slice")) or not settings.single_slice)
         result.update(
             status="ok" if len(placed) == len(rois) else ("partial" if placed else "failed"),
             rois=[r.as_dict() for r in rois] + ([spleen.as_dict()] if spleen is not None else []),
@@ -134,10 +136,13 @@ def process_case(case: CaseInput, out_dir: Path, settings: Settings, log=print) 
             segment_volumes_ml={str(k): round(float(counts[k] * voxel_ml), 1) for k in range(1, 9)},
             liver_fully_covered=not liver_touch,
             segmentation=seg_info,
+            contrast_phase=phase, contrast_phase_reason=phase_how, aorta_hu=seg_info.get("aorta_hu"),
+            hu_ranges=ranges,
+            scan_complete=complete, completeness_notes=completeness_notes,
+            quality=q_level, quality_notes=q_notes, noise_hu=None if noise is None else round(noise, 1),
         )
         result["flags"] = _flags(rois, result["input"], liver_touch, liver_ml, liver_stats, spleen, spleen_stats)
-        if settings.single_slice and not liver_stats.get("single_slice") and placed:
-            result["flags"].append("Could not fit all 3 liver circles on one slice - they are on different slices")
+        checks.apply_hu_checks(result)           # adds "... mean HU is LOW/HIGH ..." flags
         if not placed:
             result["error"] = "No ROI could be placed"
         log(f"[{case.case_id}] step 4 of 4: drawing the check image")
@@ -186,7 +191,9 @@ def flatten(result: dict) -> dict:
     for key in ROI_KEYS:
         r = rois.get(key, {})
         row.update({
-            f"{key}_mean_HU": _r(r.get("mean_hu")), f"{key}_SD_HU": _r(r.get("sd_hu")),
+            f"{key}_mean_HU": _r(r.get("mean_hu")),
+            f"{key}_HU_check": {"low": "LOW", "high": "HIGH"}.get(r.get("hu_check") or "", ""),
+            f"{key}_SD_HU": _r(r.get("sd_hu")),
             f"{key}_min_HU": _r(r.get("min_hu"), 0), f"{key}_max_HU": _r(r.get("max_hu"), 0),
             f"{key}_area_cm2": _r(r.get("area_cm2"), 2), f"{key}_diameter_mm": _r(r.get("diameter_mm")),
             f"{key}_z_mm": _r(r.get("z_mm")), f"{key}_image_no": r.get("dicom_instance"),
@@ -199,6 +206,13 @@ def flatten(result: dict) -> dict:
         "liver_mean_HU_3ROI": _r(result.get("liver_mean_hu_3roi")),
         "right_lobe_mean_HU": _r(result.get("right_lobe_mean_hu")),
         "liver_typical_HU": _r(result.get("liver_typical_hu")),
+        "quality": result.get("quality"),
+        "quality_notes": " | ".join(result.get("quality_notes") or []),
+        "scan_complete": {True: "yes", False: "NO"}.get(result.get("scan_complete"), ""),
+        "completeness_notes": " | ".join(result.get("completeness_notes") or []),
+        "contrast_phase": result.get("contrast_phase"),
+        "aorta_HU": _r(result.get("aorta_hu")),
+        "noise_SD_HU": result.get("noise_hu"),
         "liver_circles_on_one_slice": {True: "yes", False: "no"}.get(result.get("liver_circles_one_slice"), ""),
         "spleen_on_same_slice": {True: "yes", False: "no"}.get(result.get("spleen_same_slice"), ""),
         "spleen_mean_HU": _r(result.get("spleen_mean_hu")),

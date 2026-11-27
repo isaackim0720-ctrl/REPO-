@@ -43,6 +43,23 @@ class Settings:
     min_rl_separation_mm: float = 30.0
     # When a DICOM study has several series, prefer slice thickness closest to this.
     preferred_slice_mm: float = 3.0
+    # ---- automatic checks ----
+    # A circle's MEAN HU outside its range gets a warning sign. Non-contrast defaults:
+    # liver < 40 HU = moderate-severe fatty liver cut-off (Boyce et al., AJR 2010);
+    # > 80 HU ~ mean + 2 SD of 3,357 adults in that study (58.8 +/- 10.8 HU).
+    # Spleen and contrast-enhanced ranges are rough plausibility ranges; adjust to your protocol.
+    hu_range_liver_noncontrast: tuple = (40.0, 80.0)
+    hu_range_spleen_noncontrast: tuple = (30.0, 65.0)
+    hu_range_liver_contrast: tuple = (60.0, 170.0)
+    hu_range_spleen_contrast: tuple = (70.0, 180.0)
+    # Contrast phase from the aorta: >= this = contrast-enhanced, < the other = non-contrast.
+    aorta_contrast_hu: float = 130.0
+    aorta_noncontrast_hu: float = 90.0
+    # Image quality: median SD of the liver circles above these = "check" / "poor".
+    noise_check_hu: float = 25.0
+    noise_poor_hu: float = 40.0
+    # More than this fraction of unusual liver tissue = "check" (lesions/artefacts/patchy fat).
+    heterogeneity_check_fraction: float = 0.30
     # Also save the liver-segment mask (NIfTI) with each result.
     save_segmentation: bool = False
     # Keep a compressed copy of the liver + spleen region so circles can be adjusted by

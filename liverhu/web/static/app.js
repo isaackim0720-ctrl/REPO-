@@ -149,12 +149,18 @@ function caseCard(c) {
     if (!r.placed) return `<tr><td class="${cls}">${k}</td><td colspan="7" class="error">not placed</td></tr>`;
     const where = k === "SPL" ? "spleen" : `seg ${esc(r.segment_at_center)} · ${esc(r.side_of_ligament)}${r.side_ok ? "" : " ⚠"}`;
     return `<tr><td class="${cls}" title="${esc(name)}">${k}</td>
-      <td class="num">${fmt(r.mean_hu)}</td><td class="num">${fmt(r.sd_hu)}</td>
+      <td class="num">${fmt(r.mean_hu)}${r.hu_check ? ` <span class="huwarn" title="${r.hu_check === "low" ? "Too low" : "Too high"}${r.hu_range ? `: expected ${fmt(r.hu_range[0], 0)}–${fmt(r.hu_range[1], 0)} HU` : ""}">⚠ ${r.hu_check === "low" ? "low" : "high"}</span>` : ""}</td><td class="num">${fmt(r.sd_hu)}</td>
       <td class="num">${fmt(r.min_hu, 0)}</td><td class="num">${fmt(r.max_hu, 0)}</td>
       <td class="num">${fmt(r.area_cm2, 2)}</td><td class="num small">${fmt(r.z_mm)}${r.dicom_instance ? ` (#${r.dicom_instance})` : ""}</td>
       <td class="small">${where}${r.manual ? ` · <b title="moved by hand">✎ ${esc(r.edited_by || "")}</b>` : ""}</td></tr>`;
   }).join("");
   const flags = (c.flags || []).length ? `<ul class="flags">${c.flags.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>` : "";
+  const qBadge = { good: ["ok", "✓ Good quality"], check: ["partial", "⚠ Check"], poor: ["failed", "✕ Poor quality"] }[c.quality] || null;
+  const notes = [...(c.completeness_notes || []), ...(c.quality_notes || [])];
+  const checks = done && c.quality ? `<p class="small">${qBadge ? `<span class="badge ${qBadge[0]}">${qBadge[1]}</span>` : ""}
+      ${c.scan_complete === false ? ` <span class="badge failed">Incomplete scan</span>` : ""}
+      <span class="muted"> · ${esc(c.contrast_phase || "")}${c.contrast_reason ? ` (${esc(c.contrast_reason)})` : ""}</span></p>
+      ${notes.length ? `<ul class="small qnotes">${notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}` : "";
   const img = c.has_qa ? `<img src="/cases/${c.id}/qa.png?r=${c.revision || 0}" alt="QA image for ${esc(c.case_id)}" onclick="openImg(this.src)">`
     : `<div class="muted small">${done ? "No image" : "Image appears when the scan is finished."}</div>`;
   const elapsed = c.status === "running" && c.started_at ? Math.max(0, (Date.now() - Date.parse(c.started_at)) / 1000) : null;
@@ -165,6 +171,7 @@ function caseCard(c) {
       ${c.seconds ? `<span class="small muted">${mins(c.seconds)}</span>` : ""}</span></div>
     <div class="case"><div>${img}</div><div>
       ${done && c.status !== "failed" ? `<p class="small muted">Liver mean of 3 circles: <b>${fmt(c.liver_mean)} HU</b>${c.spleen_mean !== null && c.spleen_mean !== undefined ? ` · spleen <b>${fmt(c.spleen_mean)} HU</b> · liver − spleen <b>${fmt(c.l_minus_s)} HU</b> · liver/spleen <b>${fmt(c.l_s_ratio, 2)}</b>` : ""} · series: ${esc(c.series || "?")} · slice ${fmt(c.slice_mm, 2)} mm</p>` : ""}
+      ${checks}
       ${c.error ? `<p class="error small">${esc(c.error)}</p>` : ""}
       ${rows ? `<div class="table-wrap"><table><thead><tr><th>ROI</th><th class="num">Mean HU</th><th class="num">SD</th><th class="num">Min</th><th class="num">Max</th><th class="num">Area cm²</th><th class="num">z mm (image)</th><th>Where</th></tr></thead><tbody>${rows}</tbody></table></div>` : ""}
       ${flags}
@@ -261,7 +268,10 @@ async function initEditor(caseId) {
     try {
       const m = await getJSON(`/api/cases/${caseId}/measure?key=${key}&x=${s.x}&y=${s.y}&z=${s.z}&d=${s.d}`);
       s.x = m.x; s.y = m.y; s.z = m.z;          // server keeps the circle inside the image
-      $("r_mean").textContent = fmt(m.mean_hu) + " HU"; $("r_sd").textContent = fmt(m.sd_hu);
+      const rng = (info.hu_ranges || {})[key];
+      const hw = rng && m.mean_hu < rng[0] ? "low" : (rng && m.mean_hu > rng[1] ? "high" : "");
+      $("r_mean").innerHTML = esc(fmt(m.mean_hu) + " HU") + (hw ? ` <span class="huwarn" title="expected ${fmt(rng[0], 0)}–${fmt(rng[1], 0)} HU (${esc(info.contrast_phase || "")})">⚠ ${hw}</span>` : "");
+      $("r_sd").textContent = fmt(m.sd_hu);
       $("r_min").textContent = fmt(m.min_hu, 0); $("r_max").textContent = fmt(m.max_hu, 0);
       $("r_area").textContent = fmt(m.area_cm2, 2) + " cm²";
       $("r_where").textContent = (key === "SPL" ? "spleen" : `segment ${m.segment_at_center} · ${m.side_of_ligament} of ligament`) +
