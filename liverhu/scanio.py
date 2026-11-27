@@ -31,6 +31,7 @@ class CaseInput:
     files: list = field(default_factory=list)   # DICOM files of the chosen series (sorted)
     meta: dict = field(default_factory=dict)
     other_series: list = field(default_factory=list)
+    study_files: list = field(default_factory=list)   # every file of the study (all series); not saved in to_dict
 
     def to_dict(self) -> dict:
         return {"case_id": self.case_id, "kind": self.kind, "path": self.path,
@@ -179,7 +180,7 @@ def discover_cases(root: Path, label: str = "", preferred_slice_mm: float = 3.0,
         used_ids.add(out)
         return out
 
-    dicom_candidates = []
+    dicom_candidates, niftis = [], []
     for p in sorted(files):
         rel_parts = p.relative_to(base).parts[:-1] if base in p.parents else ()
         if p.name.startswith("."):
@@ -187,12 +188,20 @@ def discover_cases(root: Path, label: str = "", preferred_slice_mm: float = 3.0,
         if any(part.lower().startswith("label") for part in rel_parts):
             continue   # segmentation masks shipped with public datasets (labelsTr/...), not CT scans
         if is_nifti(p):
-            stem = p.name[:-7] if p.name.lower().endswith(".nii.gz") else p.stem
-            cases.append(CaseInput(unique(stem if not label else f"{label}_{stem}"), "nifti", path=str(p)))
+            niftis.append(p)
         elif p.name.startswith(".") or p.suffix.lower() in (".txt", ".pdf", ".jpg", ".png", ".xml", ".json", ".csv", ".exe", ".dll", ".ini", ".htm", ".html"):
             continue
         else:
             dicom_candidates.append(p)
+
+    # NIfTI files in different folders (e.g. one folder per patient) are named after their folder too
+    by_folder = len({p.parent for p in niftis}) > 1
+    for p in niftis:
+        stem = p.name[:-7] if p.name.lower().endswith(".nii.gz") else p.stem
+        if by_folder and p.parent != base:
+            stem = f"{p.parent.name}_{stem}"
+        cases.append(CaseInput(unique(stem if not label else f"{label}_{stem}"), "nifti", path=str(p),
+                               study_files=[str(p)]))
 
     # group DICOM by study -> series
     studies: dict[str, dict[str, list]] = {}
@@ -243,7 +252,8 @@ def discover_cases(root: Path, label: str = "", preferred_slice_mm: float = 3.0,
                                       "slice_thickness_mm", "contrast_agent_tag")}
                   for i, s in enumerate(summaries) if i != idx]
         meta = dict(summaries[idx], slice_positions=positions[idx])
-        cases.append(CaseInput(cid, "dicom", files=file_lists[idx], meta=meta, other_series=others))
+        cases.append(CaseInput(cid, "dicom", files=file_lists[idx], meta=meta, other_series=others,
+                               study_files=[f for fh in series_map.values() for f, _ in fh]))
     if not cases:
         warnings.append("No CT scans found (expected DICOM files, a .zip of them, or .nii/.nii.gz)")
     return cases, warnings

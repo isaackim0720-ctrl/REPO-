@@ -16,7 +16,8 @@
   <div class="progress"><div id="bar"></div></div>
   <p id="message" class="small muted" style="margin-top:8px"></p>
 </section>
+{% if only %}<p class="small" style="margin:14px 0 0"><a href="/jobs/{{ job.id }}">Show every study in this batch</a>{% if job.library %}&emsp;<a href="/library">Back to the library</a>{% endif %}</p>{% endif %}
 <div id="cases"></div>
 <div id="lightbox" class="lightbox" onclick="this.style.display='none'"><img alt="Check image"></div>
 {% endblock %}
-{% block scripts %}<script>initJob({{ job.id }});</script>{% endblock %}
+{% block scripts %}<script>initJob({{ job.id }}, {{ only or "null" }});</script>{% endblock %}

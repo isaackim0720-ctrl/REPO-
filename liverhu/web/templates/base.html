@@ -18,6 +18,7 @@
     </a>
     <nav>
       <a href="/" {% if active == "measure" %}aria-current="page"{% endif %}>Measure</a>
+      <a href="/library" {% if active == "library" %}aria-current="page"{% endif %}>Library</a>
       <a href="/download/results.xlsx">Export all to Excel</a>
       <a href="/about" {% if active == "about" %}aria-current="page"{% endif %}>How it works</a>
     </nav>

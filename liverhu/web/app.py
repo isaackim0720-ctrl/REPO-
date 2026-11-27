@@ -28,10 +28,36 @@ from ..config import Settings
 from ..pipeline import flatten
 from ..scanio import safe_name
 from . import auth
-from .jobs import Store, Worker
+from .jobs import FINISHED, Intake, Store, Worker
 
 HERE = Path(__file__).parent
 MAX_FILES_PER_REQUEST = 5000
+MIN_FREE_BYTES = 2 * 1024 ** 3      # refuse uploads when the computer is nearly out of disk space
+
+
+def _on(v, default=False) -> bool:
+    if v is None or v == "":
+        return default
+    return str(v).lower() in ("1", "true", "on", "yes")
+
+
+def _num(form, key: str, default: float, lo: float, hi: float) -> float:
+    v = form.get(key)
+    try:
+        f = float(v) if v not in (None, "") else default
+    except (TypeError, ValueError):
+        raise HTTPException(400, f"{key} must be a number")
+    return min(max(f, lo), hi)
+
+
+def _measure_settings(form) -> dict:
+    """Settings that apply when a study is measured (from the upload form or the library)."""
+    d = Settings()
+    return {"roi_diameter_mm": _num(form, "roi_diameter_mm", d.roi_diameter_mm, 5.0, 40.0),
+            "edge_margin_mm": _num(form, "edge_margin_mm", d.edge_margin_mm, 0.0, 20.0),
+            "ligament_margin_mm": _num(form, "ligament_margin_mm", d.ligament_margin_mm, 0.0, 40.0),
+            "save_segmentation": _on(form.get("save_segmentation")),
+            "keep_edit_data": _on(form.get("keep_edit_data"), True)}
 
 
 def _safe_rel(name: str) -> Path:
@@ -127,7 +153,7 @@ class SecurityMiddleware:
                 for k, v in SECURITY_HEADERS.items():
                     if k not in h:
                         h[k] = v
-                if not static:
+                if not static and "cache-control" not in h:
                     h["cache-control"] = "no-store"
             await send(message)
 
@@ -163,15 +189,18 @@ def create_app(data: Path, keep_uploads: bool = False, start_worker: bool = True
     data = Path(data)
     store = Store(data)
     worker = Worker(store, keep_uploads=keep_uploads)
+    intake = Intake(store, keep_uploads=keep_uploads, on_ready=worker.wake.set)
 
     @asynccontextmanager
     async def lifespan(_app):
-        if start_worker and not worker.is_alive():
-            worker.start()
+        if start_worker:
+            for t in (intake, worker):
+                if not t.is_alive():
+                    t.start()
         yield
 
     app = FastAPI(title="HUnter", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
-    app.state.store, app.state.worker = store, worker
+    app.state.store, app.state.worker, app.state.intake = store, worker, intake
     app.add_middleware(SecurityMiddleware)
     templates = Jinja2Templates(directory=str(HERE / "templates"))
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
@@ -199,11 +228,15 @@ def create_app(data: Path, keep_uploads: bool = False, start_worker: bool = True
         return page(request, "index.html", user=u)
 
     @app.get("/jobs/{jid}", response_class=HTMLResponse)
-    def job_page(request: Request, jid: int, u: str = Depends(user)):
+    def job_page(request: Request, jid: int, case: int | None = None, u: str = Depends(user)):
         job = store.q("SELECT * FROM jobs WHERE id=?", (jid,), one=True)
         if not job:
             raise HTTPException(404, "No such upload")
-        return page(request, "job.html", user=u, job=job)
+        return page(request, "job.html", user=u, job=job, only=case)
+
+    @app.get("/library", response_class=HTMLResponse)
+    def library_page(request: Request, u: str = Depends(user)):
+        return page(request, "library.html", user=u, active="library")
 
     @app.get("/about", response_class=HTMLResponse)
     def about(request: Request, u: str = Depends(user)):
@@ -213,27 +246,23 @@ def create_app(data: Path, keep_uploads: bool = False, start_worker: bool = True
     @app.post("/api/jobs")
     async def create_job(request: Request, u: str = Depends(user)):
         form = await request.form()
-        d = Settings()
-        try:
-            s = Settings(
-                roi_diameter_mm=min(max(float(form.get("roi_diameter_mm") or d.roi_diameter_mm), 5.0), 40.0),
-                edge_margin_mm=min(max(float(form.get("edge_margin_mm") or d.edge_margin_mm), 0.0), 20.0),
-                ligament_margin_mm=min(max(float(form.get("ligament_margin_mm") or d.ligament_margin_mm), 0.0), 40.0),
-                preferred_slice_mm=min(max(float(form.get("preferred_slice_mm") or d.preferred_slice_mm), 0.5), 10.0),
-                save_segmentation=str(form.get("save_segmentation", "")).lower() in ("1", "true", "on"),
-                keep_edit_data=str(form.get("keep_edit_data", "on")).lower() in ("1", "true", "on"))
-        except ValueError:
-            raise HTTPException(400, "Settings must be numbers")
+        s = Settings(**_measure_settings(form),
+                     preferred_slice_mm=_num(form, "preferred_slice_mm", Settings().preferred_slice_mm, 0.5, 10.0))
         label = safe_name(str(form.get("label") or ""), "")[:40]
-        ident = str(form.get("include_identifiers", "")).lower() in ("1", "true", "on")
-        jid = store.create_job(label, u, s, ident)
+        jid = store.create_job(label, u, s, _on(form.get("include_identifiers")), library=_on(form.get("library")))
         return {"job_id": jid}
+
+    def _check_disk():
+        if shutil.disk_usage(data).free < MIN_FREE_BYTES:
+            raise HTTPException(507, "This computer is almost out of disk space. Delete studies from the "
+                                     "library (or other files) and try again.")
 
     @app.post("/api/jobs/{jid}/files")
     async def add_files(request: Request, jid: int, u: str = Depends(user)):
         job = store.q("SELECT status FROM jobs WHERE id=?", (jid,), one=True)
         if not job or job["status"] != "uploading":
             raise HTTPException(409, "This upload is closed")
+        _check_disk()
         form = await request.form(max_files=MAX_FILES_PER_REQUEST, max_fields=MAX_FILES_PER_REQUEST + 50)
         root = store.upload_dir(jid).resolve()
         saved = 0
@@ -265,7 +294,7 @@ def create_app(data: Path, keep_uploads: bool = False, start_worker: bool = True
             raise HTTPException(404)
         if job["status"] == "uploading":
             store.x("UPDATE jobs SET status='queued' WHERE id=?", (jid,))
-            worker.wake.set()
+            intake.wake.set()
         return {"ok": True}
 
     @app.post("/api/jobs/{jid}/delete")
@@ -273,17 +302,16 @@ def create_app(data: Path, keep_uploads: bool = False, start_worker: bool = True
         job = store.q("SELECT status FROM jobs WHERE id=?", (jid,), one=True)
         if not job:
             raise HTTPException(404)
-        if job["status"] == "running":
-            store.x("UPDATE jobs SET status='cancelled' WHERE id=?", (jid,))
-            if worker.current_proc:
-                worker.current_proc.kill()
+        store.x("UPDATE jobs SET status='cancelled' WHERE id=?", (jid,))
+        for r in store.q("SELECT id FROM cases WHERE job_id=?", (jid,)):
+            worker.stop_case(r["id"])
         store.delete_job(jid)
         return {"ok": True}
 
     @app.get("/api/jobs")
     def list_jobs(u: str = Depends(user)):
         jobs = store.q("SELECT id, label, submitted_by, created_at, status, n_cases, n_done, n_files, message "
-                       "FROM jobs ORDER BY id DESC LIMIT 200")
+                       "FROM jobs WHERE COALESCE(library, 0)=0 ORDER BY id DESC LIMIT 200")
         avg = store.q("SELECT AVG(seconds) AS a FROM cases WHERE status IN ('ok','partial')", one=True)["a"]
         queued = store.q("SELECT COUNT(*) AS n FROM cases WHERE status IN ('queued','running')", one=True)["n"]
         return {"jobs": jobs, "avg_seconds_per_case": avg, "cases_waiting": queued}
@@ -297,8 +325,11 @@ def create_app(data: Path, keep_uploads: bool = False, start_worker: bool = True
         cases = [_summary(r) for r in rows]
         for c, r in zip(cases, rows):
             c["has_qa"] = (store.case_dir(jid, r["id"]) / "qa.png").exists()
-        ahead = store.q("SELECT COUNT(*) AS n FROM cases WHERE status IN ('queued','running') AND job_id<?",
-                        (jid,), one=True)["n"]
+        places = store.queue_positions()
+        ids = {r["id"] for r in rows}
+        mine = [p for cid, p in places.items() if cid in ids]
+        # studies from other uploads (or the library) that are measured before this upload's next one
+        ahead = sum(1 for cid, p in places.items() if cid not in ids and p < min(mine)) if mine else 0
         avg = store.q("SELECT AVG(seconds) AS a FROM cases WHERE status IN ('ok','partial')", one=True)["a"]
         job.pop("settings_json", None)
         return {"job": job, "cases": cases, "cases_ahead": ahead, "avg_seconds_per_case": avg}
@@ -434,6 +465,82 @@ def create_app(data: Path, keep_uploads: bool = False, start_worker: bool = True
         res = editmod.reset_to_auto(json.loads(row["result_json"] or "{}"), key)
         await run_in_threadpool(_save_result, row, case_dir, res)
         return {"ok": True}
+
+    # ---------- scan library ----------
+    @app.get("/api/library")
+    def library_list(u: str = Depends(user)):
+        rows = store.q("SELECT c.id, c.job_id, c.case_id, c.status, c.result_json, c.info_json, c.current_step,"
+                       " c.started_at, c.finished_at, j.label, j.created_at, j.submitted_by "
+                       "FROM cases c JOIN jobs j ON j.id = c.job_id WHERE j.library=1 ORDER BY c.id DESC")
+        places = store.queue_positions()
+        keys: dict[str, list[int]] = {}
+        studies = []
+        for r in rows:
+            info = json.loads(r["info_json"] or "{}")
+            res = json.loads(r["result_json"]) if r.get("result_json") else {}
+            rois = {x["key"]: x for x in res.get("rois", [])}
+            if info.get("study_key"):
+                keys.setdefault(info["study_key"], []).append(r["id"])
+            studies.append({
+                "id": r["id"], "job_id": r["job_id"], "name": r["case_id"], "status": r["status"],
+                "batch": r["label"] or "", "added_at": r["created_at"], "added_by": r["submitted_by"],
+                "step": r["current_step"] or "", "started_at": r["started_at"], "place": places.get(r["id"]),
+                "info": {k: v for k, v in info.items() if k != "study_key"}, "study_key": info.get("study_key"),
+                "measured": bool(res) and res.get("status") in ("ok", "partial"),
+                "measured_at": r["finished_at"] if res else None,
+                "liver_mean": res.get("liver_mean_hu_3roi"), "spleen_mean": res.get("spleen_mean_hu"),
+                "quality": res.get("quality"), "scan_complete": res.get("scan_complete"),
+                "hu_warning": any((x or {}).get("hu_check") for x in rois.values()),
+                "manual": any((x or {}).get("manual") for x in rois.values()),
+                "error": res.get("error")})
+        for s in studies:   # the same study uploaded more than once
+            others = [i for i in keys.get(s.pop("study_key") or "", []) if i != s["id"]]
+            s["same_study_as"] = others
+        pending = store.q("SELECT id, label, status, n_files, message FROM jobs WHERE library=1 "
+                          "AND status IN ('uploading','queued','failed') ORDER BY id DESC")
+        avg = store.q("SELECT AVG(seconds) AS a FROM cases WHERE status IN ('ok','partial')", one=True)["a"]
+        du = shutil.disk_usage(data)
+        return {"studies": studies, "batches": pending, "avg_seconds_per_case": avg,
+                "waiting": len(places), "stored_bytes": sum(s["info"].get("size_bytes") or 0 for s in studies),
+                "free_bytes": du.free}
+
+    async def _ids(request: Request) -> tuple[list[int], dict]:
+        try:
+            body = await request.json()
+            ids = [int(i) for i in body.get("ids", [])][:5000]
+        except (ValueError, TypeError, AttributeError):
+            raise HTTPException(400, "send {\"ids\": [...]}")
+        return list(dict.fromkeys(ids)), body
+
+    @app.post("/api/library/measure")
+    async def library_measure(request: Request, u: str = Depends(user)):
+        ids, body = await _ids(request)
+        queued = store.queue_cases(ids, _measure_settings(body))
+        with _ed_lock:
+            for cid in queued:
+                _ed_cache.pop(cid, None)
+        worker.wake.set()
+        return {"queued": queued}
+
+    @app.post("/api/library/unqueue")
+    async def library_unqueue(request: Request, u: str = Depends(user)):
+        ids, _ = await _ids(request)
+        return {"unqueued": store.unqueue_cases(ids)}
+
+    @app.post("/api/library/delete")
+    async def library_delete(request: Request, u: str = Depends(user)):
+        ids, _ = await _ids(request)
+        lib = {r["id"] for r in store.q("SELECT c.id FROM cases c JOIN jobs j ON j.id = c.job_id WHERE j.library=1")}
+        deleted = []
+        for cid in ids:
+            if cid not in lib:
+                continue
+            worker.stop_case(cid)
+            with _ed_lock:
+                _ed_cache.pop(cid, None)
+            await run_in_threadpool(store.delete_case, cid)
+            deleted.append(cid)
+        return {"deleted": deleted}
 
     def _rows(job: int | None):
         if job:

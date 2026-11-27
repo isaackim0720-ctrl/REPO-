@@ -96,3 +96,13 @@ def test_zip_path_traversal_refused(tmp_path):
     with pytest.raises(ValueError):
         safe_extract_zip(z, tmp_path / "out")
     assert not (tmp_path.parent / "escape.txt").exists()
+
+
+def test_nifti_in_patient_folders_are_named_after_the_folder(tmp_path):
+    vol = _vol().astype(np.int16)
+    for pat in ("patient_101", "patient_102"):
+        (tmp_path / "export" / pat).mkdir(parents=True)
+        nib.save(nib.Nifti1Image(vol, np.diag([0.8, 0.8, 2.0, 1])), tmp_path / "export" / pat / "ct.nii.gz")
+    cases, _ = discover_cases(tmp_path)
+    assert [c.case_id for c in cases] == ["patient_101_ct", "patient_102_ct"]
+    assert cases[0].study_files == [cases[0].path]

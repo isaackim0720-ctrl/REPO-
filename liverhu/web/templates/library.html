@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% set active = "library" %}
+{% block title %}Library · HUnter{% endblock %}
+{% block content %}
+<h1>Scan library</h1>
+<p class="muted">Store studies here and measure them whenever you want. Tick the ones to measure and press <b>Measure selected</b>; they are measured one after another, in the order you picked them. Scans stay on this computer until you delete them.</p>
+<div class="measure">
+  <section id="drop" class="viewport-drop" aria-label="Drop studies to store">
+    <svg width="40" height="40" viewBox="0 0 40 40" aria-hidden="true"><rect x="7" y="9" width="26" height="22" rx="2" fill="none" stroke="#8e9aa8" stroke-width="1.5"/><path d="M7 15h26M14 9v-3h12v3" fill="none" stroke="#8e9aa8" stroke-width="1.5"/></svg>
+    <div class="big">Drop studies to store</div>
+    <p class="muted small">DICOM folders (many patients at once is fine), .zip files, or .nii / .nii.gz. Nothing is measured until you ask.</p>
+    <div class="row">
+      <button type="button" onclick="document.getElementById('pickFolder').click()">Choose folder</button>
+      <button type="button" onclick="document.getElementById('pickFiles').click()">Choose files</button>
+    </div>
+    <input id="pickFolder" type="file" webkitdirectory directory multiple hidden>
+    <input id="pickFiles" type="file" multiple hidden accept=".zip,.nii,.gz,.dcm,application/dicom">
+    <p id="picked" class="small"></p>
+    <div id="upbox" hidden style="width:min(420px,100%)">
+      <div class="progress"><div id="bar"></div></div>
+      <p id="upmsg" class="small muted" style="margin-top:8px"></p>
+    </div>
+  </section>
+  <section class="card side">
+    <h2>Add to the library</h2>
+    <div class="field"><label for="label">Batch name (optional)</label><input id="label" type="text" placeholder="cohort A"></div>
+    <button id="go" class="primary" disabled>Add to library</button>
+    <details>
+      <summary>More settings</summary>
+      <div class="field" style="margin-top:12px"><label for="slice">Preferred slice thickness (mm)</label><input id="slice" type="number" step="0.5" min="0.5" max="10" value="{{ defaults.preferred_slice_mm }}"></div>
+      <p class="small muted">From studies with several series, HUnter will measure the non-contrast series with slices closest to this thickness. All series are stored.</p>
+      <label class="check"><input id="ident" type="checkbox"> Show DICOM PatientID, AccessionNumber and StudyDate in the library and results
+        <span>Only if your study approval allows identifiers.</span></label>
+    </details>
+  </section>
+</div>
+
+<section class="card" style="margin-top:18px">
+  <div class="lib-head">
+    <h2>Stored studies</h2>
+    <span id="libsum" class="small muted"></span>
+  </div>
+  <div id="notices"></div>
+  <div class="lib-tools">
+    <input id="filter" type="search" placeholder="Find a study, batch or series" aria-label="Find a study">
+    <div class="lib-actions">
+      <span id="selcount" class="small muted">None selected</span>
+      <label class="inline-field" for="diam">Circle <input id="diam" type="number" step="0.5" min="5" max="40" value="{{ defaults.roi_diameter_mm }}"> mm</label>
+      <button id="measure" class="primary" disabled>Measure selected</button>
+      <button id="unqueue" disabled>Stop waiting</button>
+      <button id="delete" class="danger" disabled>Delete</button>
+    </div>
+  </div>
+  <details class="lib-more">
+    <summary>Measuring settings</summary>
+    <div class="row" style="margin-top:12px">
+      <div class="field"><label for="edge">Gap from liver edge (mm)</label><input id="edge" type="number" step="0.5" min="0" max="20" value="{{ defaults.edge_margin_mm }}"></div>
+      <div class="field"><label for="lig">Gap from falciform ligament (mm)</label><input id="lig" type="number" step="0.5" min="0" max="40" value="{{ defaults.ligament_margin_mm }}"></div>
+    </div>
+    <label class="check"><input id="keepedit" type="checkbox" checked> Keep the liver and spleen part of each scan so circles can be adjusted by hand</label>
+    <label class="check"><input id="saveseg" type="checkbox"> Also keep the liver-segment mask (NIfTI)</label>
+  </details>
+  <p id="libmsg" class="small" role="status"></p>
+  <div class="table-wrap">
+    <table class="worklist library">
+      <thead><tr><th class="sel"><input type="checkbox" id="selall" aria-label="Select all studies shown"></th><th>Study</th><th>Batch</th><th>Added</th><th class="num">Size</th><th>Status</th></tr></thead>
+      <tbody id="lib"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+{% block scripts %}<script>initLibrary();</script>{% endblock %}

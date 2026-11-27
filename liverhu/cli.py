@@ -111,7 +111,7 @@ def _address_lines(port: int, https_port: int, lan_http: bool = False) -> list[s
         for ip in ips:
             lines.append(f"  Also, NOT encrypted:         http://{ip}:{port}")
     if not https_port and not lan_http:
-        lines.append("  Other computers cannot connect until https works (run the update script).")
+        lines.append("  Other computers cannot connect: https is off or not working (run the update script).")
     ts = tailscale_state(port)
     mac = platform.system() == "Darwin"
     if ts["state"] == "serving":

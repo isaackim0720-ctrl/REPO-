@@ -54,20 +54,24 @@ function sendBatch(jobId, batch, onProgress) {
   });
 }
 
-async function startUpload() {
+const val = (id) => ($(id) ? $(id).value : "");
+const ticked = (id, dflt = false) => ($(id) ? $(id).checked : dflt);
+
+async function startUpload(library = false) {
   $("go").disabled = true;
   $("upbox").hidden = false;
   const total = picked.reduce((a, x) => a + x.file.size, 0) || 1;
   try {
     const fd = new FormData();
-    fd.append("label", $("label").value);
-    fd.append("roi_diameter_mm", $("diam").value);
-    fd.append("edge_margin_mm", $("edge").value);
-    fd.append("ligament_margin_mm", $("lig").value);
-    fd.append("preferred_slice_mm", $("slice").value);
-    if ($("ident").checked) fd.append("include_identifiers", "on");
-    if ($("saveseg").checked) fd.append("save_segmentation", "on");
-    fd.append("keep_edit_data", $("keepedit").checked ? "on" : "off");
+    fd.append("label", val("label"));
+    fd.append("roi_diameter_mm", val("diam"));
+    fd.append("edge_margin_mm", val("edge"));
+    fd.append("ligament_margin_mm", val("lig"));
+    fd.append("preferred_slice_mm", val("slice"));
+    if (ticked("ident")) fd.append("include_identifiers", "on");
+    if (ticked("saveseg")) fd.append("save_segmentation", "on");
+    fd.append("keep_edit_data", ticked("keepedit", true) ? "on" : "off");
+    if (library) fd.append("library", "on");
     const { job_id } = await getJSON("/api/jobs", { method: "POST", body: fd });
     let sent = 0, batch = [], batchBytes = 0;
     const flush = async () => {
@@ -86,16 +90,25 @@ async function startUpload() {
     }
     await flush();
     await getJSON(`/api/jobs/${job_id}/start`, { method: "POST" });
+    if (library) {
+      $("upmsg").textContent = "Uploaded. The studies appear in the list below as soon as their files are read.";
+      setPicked([]);
+      $("label").value = "";
+      refreshLibrary();
+      setTimeout(() => { $("upbox").hidden = true; $("bar").style.width = "0"; }, 6000);
+      return;
+    }
     $("upmsg").textContent = "Upload complete - starting measurement…";
     location.href = `/jobs/${job_id}`;
   } catch (e) {
-    $("upmsg").innerHTML = `<span class="error">Upload failed: ${esc(e.message)}</span>`;
-    $("go").disabled = false;
+    const m = String(e.message || e);
+    $("upmsg").innerHTML = `<span class="error">Upload failed: ${esc(m.startsWith("507") ? "this computer is almost out of disk space. Delete studies from the library (or other files) and try again." : m)}</span>`;
+    $("go").disabled = picked.length === 0;
   }
 }
 
 // ---------- index page ----------
-function initIndex() {
+function initDrop() {
   const drop = $("drop");
   $("pickFolder").onchange = (e) => setPicked([...e.target.files].map((f) => ({ file: f, path: f.webkitRelativePath || f.name })));
   $("pickFiles").onchange = (e) => setPicked([...e.target.files].map((f) => ({ file: f, path: f.name })));
@@ -109,9 +122,154 @@ function initIndex() {
       setPicked((await Promise.all(items.map((it) => readEntry(it, "")))).flat());
     } else setPicked([...e.dataTransfer.files].map((f) => ({ file: f, path: f.name })));
   };
-  $("go").onclick = startUpload;
+}
+
+function initIndex() {
+  initDrop();
+  $("go").onclick = () => startUpload(false);
   refreshJobs();
   setInterval(refreshJobs, 4000);
+}
+
+// ---------- library page ----------
+let lib = { studies: [] }, libSel = new Set(), libSig = "", lastClick = null;
+const gb = (b) => (b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round((b || 0) / 1e6))} MB`);
+const nth = (n) => { const s = ["th", "st", "nd", "rd"], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); };
+
+function initLibrary() {
+  initDrop();
+  $("go").onclick = () => startUpload(true);
+  $("filter").oninput = () => { libSig = ""; renderLibrary(); };
+  $("selall").onchange = (e) => {
+    for (const s of shownStudies()) e.target.checked ? libSel.add(s.id) : libSel.delete(s.id);
+    libSig = ""; renderLibrary();
+  };
+  $("lib").addEventListener("click", (e) => {
+    const tr = e.target.closest("tr[data-id]");
+    if (!tr || e.target.closest("a")) return;
+    const id = Number(tr.dataset.id);
+    const box = tr.querySelector("input[type=checkbox]");
+    const on = e.target === box ? box.checked : !libSel.has(id);
+    const shown = shownStudies().map((s) => s.id);
+    if (e.shiftKey && lastClick !== null && shown.includes(lastClick)) {   // shift-click selects a range
+      const [a, b] = [shown.indexOf(lastClick), shown.indexOf(id)].sort((x, y) => x - y);
+      for (const i of shown.slice(a, b + 1)) on ? libSel.add(i) : libSel.delete(i);
+    } else on ? libSel.add(id) : libSel.delete(id);
+    lastClick = id;
+    libSig = ""; renderLibrary();
+  });
+  $("measure").onclick = measureSelected;
+  $("unqueue").onclick = () => libAction("unqueue", [...libSel], (d) => `${d.unqueued.length} taken out of the queue.`);
+  $("delete").onclick = deleteSelected;
+  refreshLibrary();
+  setInterval(refreshLibrary, 4000);
+}
+
+function shownStudies() {
+  const f = val("filter").trim().toLowerCase();
+  if (!f) return lib.studies;
+  return lib.studies.filter((s) => [s.name, s.batch, s.info.series, s.info.patient_id, s.info.accession_number, s.added_by]
+    .some((t) => String(t || "").toLowerCase().includes(f)));
+}
+
+async function refreshLibrary() {
+  try { lib = await getJSON("/api/library"); } catch (e) { return; }
+  const known = new Set(lib.studies.map((s) => s.id));
+  for (const id of [...libSel]) if (!known.has(id)) libSel.delete(id);
+  renderLibrary();
+}
+
+function libStatus(s) {
+  if (s.status === "stored") return `<span class="badge">stored</span>`;
+  if (s.status === "queued") return `<span class="badge queued">waiting, ${nth(s.place || 1)} in line</span>`;
+  if (s.status === "running") {
+    const t = s.started_at ? `, ${mins(Math.max(0, (Date.now() - Date.parse(s.started_at)) / 1000))}` : "";
+    return `<span class="badge running">measuring</span> <span class="small muted">${esc(s.step || "starting")}${t}</span>`;
+  }
+  const link = `/jobs/${s.job_id}?case=${s.id}`;
+  if (!s.measured) return `<span class="badge failed">failed</span> <a class="small" href="${link}">Why</a>`;
+  const warn = s.hu_warning || s.quality === "poor" || s.quality === "check" || s.scan_complete === false;
+  return `<a class="result-link" href="${link}">${warn ? `<span class="huwarn" title="Has warnings: open the result">${WARN_ICON}</span>` : ""}`
+    + `liver <b>${fmt(s.liver_mean)}</b>, spleen <b>${fmt(s.spleen_mean)}</b> HU</a>${s.manual ? ` <span class="small muted">circles moved by hand</span>` : ""}`;
+}
+
+function renderLibrary() {
+  const shown = shownStudies();
+  const sig = JSON.stringify([shown.map((s) => [s.id, s.status, s.place, s.step, s.measured, s.liver_mean, s.status === "running" ? Date.now() : 0]), [...libSel], lib.batches]);
+  if (sig !== libSig) {
+    libSig = sig;
+    $("lib").innerHTML = shown.map((s) => {
+      const i = s.info || {};
+      const detail = [i.series, i.n_images ? `${i.n_images} images` : "", i.slice_mm ? `${fmt(i.slice_mm, 1)} mm` : ""].filter(Boolean).join(", ");
+      const ids = [i.patient_id ? `ID ${i.patient_id}` : "", i.study_date ? `date ${i.study_date}` : ""].filter(Boolean).join(", ");
+      const dup = s.same_study_as.length ? `<div class="small warn-text">Same study as ${s.same_study_as.map((x) => esc(nameOf(x))).join(", ")}</div>` : "";
+      return `<tr data-id="${s.id}" class="${libSel.has(s.id) ? "picked" : ""}">
+        <td class="sel"><input type="checkbox" ${libSel.has(s.id) ? "checked" : ""} aria-label="Select ${esc(s.name)}"></td>
+        <td><b>${esc(s.name)}</b><div class="small muted">${esc(detail)}${ids ? `<br>${esc(ids)}` : ""}</div>${dup}</td>
+        <td class="small">${esc(s.batch || "–")}</td>
+        <td class="small">${esc((s.added_at || "").replace("T", " ").slice(0, 16))}<div class="muted">${esc(s.added_by)}</div></td>
+        <td class="num small">${gb(i.size_bytes)}</td>
+        <td>${libStatus(s)}</td></tr>`;
+    }).join("") || `<tr><td colspan="6" class="muted">${lib.studies.length ? "No study matches." : "The library is empty. Drop studies above to store them."}</td></tr>`;
+    $("notices").innerHTML = (lib.batches || []).map((b) => b.status === "failed"
+      ? `<p class="notice bad">${esc(b.label || "Upload " + b.id)}: ${esc(b.message || "no CT scans found")}. <a href="#" onclick="dismissBatch(${b.id});return false">Dismiss</a></p>`
+      : b.status === "uploading"
+        ? `<p class="notice">${esc(b.label || "Upload " + b.id)}: uploading, ${b.n_files} files so far. <a href="#" onclick="dismissBatch(${b.id}, true);return false">Remove</a> <span class="muted">(only if this upload was interrupted)</span></p>`
+        : `<p class="notice">${esc(b.label || "Upload " + b.id)}: reading the files…</p>`).join("");
+  }
+  const all = shown.length > 0 && shown.every((s) => libSel.has(s.id));
+  $("selall").checked = all;
+  $("selall").indeterminate = !all && shown.some((s) => libSel.has(s.id));
+  const sel = lib.studies.filter((s) => libSel.has(s.id));
+  const canMeasure = sel.filter((s) => !["queued", "running"].includes(s.status)).length;
+  const waiting = sel.filter((s) => s.status === "queued").length;
+  $("selcount").textContent = sel.length ? `${sel.length} selected` : "None selected";
+  $("measure").disabled = !canMeasure;
+  $("measure").textContent = canMeasure > 1 ? `Measure ${canMeasure} selected` : "Measure selected";
+  $("unqueue").disabled = !waiting;
+  $("delete").disabled = !sel.length;
+  const free = lib.free_bytes;
+  const wait = lib.waiting ? ` ${lib.waiting} in the measuring queue${lib.avg_seconds_per_case ? `, about ${mins(lib.waiting * lib.avg_seconds_per_case)}` : ""}.` : "";
+  $("libsum").innerHTML = `${lib.studies.length} ${lib.studies.length === 1 ? "study" : "studies"}, ${gb(lib.stored_bytes)}.${wait} `
+    + `<span class="${free < 10e9 ? "warn-text" : ""}">${gb(free)} free on this computer.</span>`;
+}
+
+function nameOf(id) { const s = lib.studies.find((x) => x.id === id); return s ? s.name : `#${id}`; }
+
+async function libAction(what, ids, msg, extra = {}) {
+  try {
+    const d = await getJSON(`/api/library/${what}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids, ...extra }) });
+    $("libmsg").textContent = msg(d);
+    $("libmsg").className = "small";
+  } catch (e) {
+    $("libmsg").textContent = `That did not work: ${e.message}`;
+    $("libmsg").className = "small error";
+  }
+  libSel.clear(); libSig = "";
+  await refreshLibrary();
+}
+
+function measureSelected() {
+  // in the order they were picked
+  const ids = [...libSel].filter((id) => { const s = lib.studies.find((x) => x.id === id); return s && !["queued", "running"].includes(s.status); });
+  const again = ids.filter((id) => lib.studies.find((x) => x.id === id).measured).length;
+  if (again && !confirm(`${again} of these ${again === 1 ? "was" : "were"} measured before. Measuring again replaces ${again === 1 ? "its" : "their"} results, including circles moved by hand. Continue?`)) return;
+  libAction("measure", ids, (d) => `${d.queued.length} ${d.queued.length === 1 ? "study" : "studies"} added to the queue. They are measured one after another; you can close this page.`, {
+    roi_diameter_mm: val("diam"), edge_margin_mm: val("edge"), ligament_margin_mm: val("lig"),
+    keep_edit_data: ticked("keepedit", true), save_segmentation: ticked("saveseg"),
+  });
+}
+
+function deleteSelected() {
+  const n = libSel.size;
+  if (!confirm(`Delete ${n} ${n === 1 ? "study" : "studies"} from the library? Their scans and results are removed from this computer. This cannot be undone.`)) return;
+  libAction("delete", [...libSel], (d) => `${d.deleted.length} deleted.`);
+}
+
+async function dismissBatch(id, ask = false) {
+  if (ask && !confirm("Remove this unfinished upload? Files received so far are deleted.")) return;
+  await getJSON(`/api/jobs/${id}/delete`, { method: "POST" });
+  libSig = ""; refreshLibrary();
 }
 
 async function refreshJobs() {
@@ -119,7 +277,7 @@ async function refreshJobs() {
     const d = await getJSON("/api/jobs");
     const rows = d.jobs.map((j) => {
       const pct = j.n_cases ? Math.round((100 * j.n_done) / j.n_cases) : 0;
-      const label = { done: "measured", running: "measuring", queued: "waiting", uploading: "uploading", failed: "failed", cancelled: "cancelled" }[j.status] || j.status;
+      const label = { done: "measured", running: "measuring", queued: "reading files", uploading: "uploading", failed: "failed", cancelled: "cancelled" }[j.status] || j.status;
       return `<tr>
         <td class="muted">${j.id}</td><td><a href="/jobs/${j.id}">${esc(j.label || "Upload " + j.id)}</a></td>
         <td>${esc(j.submitted_by)}</td><td class="small muted">${esc((j.created_at || "").replace("T", " ").slice(0, 16))}</td>
@@ -191,16 +349,17 @@ function caseCard(c) {
   const notes = [...(c.completeness_notes || []), ...(c.quality_notes || [])];
   const flags = (c.flags || []).filter((f) => !/ mean HU is /.test(f));
   const img = c.has_qa ? `<img src="/cases/${c.id}/qa.png?r=${c.revision || 0}" alt="Check image for ${esc(c.case_id)}" onclick="openImg(this.src)">`
-    : `<div class="wait">${done ? "No image" : "The check image appears when the study is measured."}</div>`;
+    : `<div class="wait">${done ? "No image" : c.status === "stored" ? "Stored in the library, not measured yet. Tick it in the Library and press Measure." : "The check image appears when the study is measured."}</div>`;
+  const label = { running: "measuring", queued: "waiting", stored: "in library" }[c.status] || c.status;
   const elapsed = c.status === "running" && c.started_at ? Math.max(0, (Date.now() - Date.parse(c.started_at)) / 1000) : null;
   const running = c.status === "running" ? `${esc(c.step || "starting")}${elapsed !== null ? `, ${mins(elapsed)} so far` : ""}` : "";
   const measured = done && c.status !== "failed";
-  return `<section class="card">
+  return `<section class="card" id="case-${c.id}">
     <div class="study-head"><h2>${esc(c.case_id)}</h2>
       <div class="status-line">
         ${measured && qBadge ? `<span class="badge ${qBadge[0]}">${qBadge[0] === "ok" ? "" : WARN_ICON.replace("<svg", '<svg width="12" height="12"')}${qBadge[1]}</span>` : ""}
         ${measured && c.scan_complete === false ? `<span class="badge failed">Incomplete scan</span>` : ""}
-        ${!measured ? `<span class="badge ${esc(c.status)}">${esc(c.status === "running" ? "measuring" : c.status)}</span>` : ""}
+        ${!measured ? `<span class="badge ${esc(c.status)}">${esc(label)}</span>` : ""}
         ${c.seconds ? `<span class="small muted">${mins(c.seconds)}</span>` : ""}
       </div></div>
     ${running ? `<p class="small">${running}</p>` : ""}
@@ -223,28 +382,30 @@ function caseCard(c) {
 function openImg(src) { const lb = $("lightbox"); lb.querySelector("img").src = src; lb.style.display = "flex"; }
 
 let lastSig = "";
-async function refreshJob(id) {
+async function refreshJob(id, only) {
   const d = await getJSON(`/api/jobs/${id}`);
   const j = d.job;
+  if (only) d.cases = d.cases.filter((c) => c.id === only);
   $("status").className = "badge " + j.status;
-  $("status").textContent = { done: "measured", running: "measuring", queued: "waiting", uploading: "uploading" }[j.status] || j.status;
+  $("status").textContent = { done: "measured", running: "measuring", queued: "reading files", uploading: "uploading", stored: "in library" }[j.status] || j.status;
   const pct = j.n_cases ? (100 * j.n_done) / j.n_cases : 0;
   $("bar").style.width = pct + "%";
-  let p = j.n_cases ? `${j.n_done} of ${j.n_cases} scan(s) measured` : (j.status === "queued" ? "waiting for the computer…" : "");
+  let p = j.n_cases ? `${j.n_done} of ${j.n_cases} scan(s) measured` : (j.status === "queued" ? "reading the files…" : "");
   const left = j.n_cases - j.n_done;
   if (left > 0 && d.avg_seconds_per_case) p += ` · about ${mins((left + d.cases_ahead) * d.avg_seconds_per_case)} left`;
   if (d.cases_ahead) p += ` · ${d.cases_ahead} scan(s) from earlier uploads first`;
   $("progress").textContent = p;
   $("message").textContent = j.message || "";
   const sig = JSON.stringify(d.cases.map((c) => [c.id, c.status, c.step, c.has_qa, c.revision, c.status === "running" ? Date.now() : 0]));
-  if (sig !== lastSig) { $("cases").innerHTML = d.cases.map(caseCard).join(""); lastSig = sig; }
+  if (sig !== lastSig) { $("cases").innerHTML = d.cases.map(caseCard).join("") || `<p class="muted">This study is no longer stored.</p>`; lastSig = sig; }
+  if (j.status === "stored") return !d.cases.some((c) => ["queued", "running"].includes(c.status));
   return ["done", "failed", "cancelled"].includes(j.status);
 }
 
-function initJob(id) {
+function initJob(id, only = null) {
   const tick = async () => {
     let finished = false;
-    try { finished = await refreshJob(id); } catch (e) { /* retry */ }
+    try { finished = await refreshJob(id, only); } catch (e) { /* retry */ }
     if (!finished) setTimeout(tick, 4000);
   };
   tick();

@@ -1,7 +1,16 @@
-"""Job store (SQLite) and the single background worker.
+"""Job store (SQLite), the intake step and the single measuring worker.
 
-One upload = one job; a job can contain many cases (studies). Cases are processed ONE AT
-A TIME, each in a fresh subprocess, so an 8 GB lab PC never runs two models at once.
+One upload = one job; a job holds one case per study found in it. Two kinds of upload:
+
+* "measure now": every study is put in the queue straight away, and the scan files are
+  deleted once all of them are measured;
+* library: studies are only stored (status 'stored'). People pick studies later and add them
+  to the queue; the files stay until the study is deleted.
+
+All queued studies, from any upload, form ONE queue (in the order they were queued) and are
+measured ONE AT A TIME, each in a fresh subprocess, so an 8 GB lab PC never runs two models at
+once. Reading new uploads (finding the studies) runs separately, so it never waits for a
+measurement to finish.
 """
 from __future__ import annotations
 
@@ -17,9 +26,10 @@ import time
 from pathlib import Path
 
 from ..config import Settings
-from ..scanio import discover_cases
+from ..scanio import CaseInput, discover_cases
 
 CASE_TIMEOUT_S = 60 * 60
+FINISHED = ("ok", "partial", "failed")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -34,6 +44,10 @@ CREATE TABLE IF NOT EXISTS cases (
   started_at TEXT, finished_at TEXT, seconds REAL, current_step TEXT DEFAULT ''
 );
 """
+# columns added after v0.7 (added to older databases on start)
+MIGRATIONS = [("jobs", "library", "INTEGER DEFAULT 0"),
+              ("cases", "queue_order", "REAL"),
+              ("cases", "info_json", "TEXT")]
 
 
 def relocate_case_file(case_dir: Path) -> None:
@@ -64,6 +78,34 @@ def now() -> str:
     return dt.datetime.now().isoformat(timespec="seconds")
 
 
+def case_info(case: CaseInput) -> dict:
+    """What the library shows about a stored study (before it is measured)."""
+    meta = case.meta or {}
+    size = 0
+    for f in case.study_files or ([case.path] if case.path else case.files):
+        try:
+            size += os.path.getsize(f)
+        except OSError:
+            pass
+    info = {"kind": case.kind, "series": meta.get("series_description") or "",
+            "n_images": meta.get("n_images"), "slice_mm": meta.get("slice_thickness_mm"),
+            "study_key": meta.get("study_key"), "contrast_tag": meta.get("contrast_agent_tag") or "",
+            "size_bytes": size}
+    for k in ("patient_id", "accession_number", "study_date"):
+        if meta.get(k):
+            info[k] = meta[k]
+    if case.kind == "nifti" and case.path:
+        info["series"] = Path(case.path).name
+        try:
+            import nibabel as nib
+            h = nib.load(case.path).header            # reads only the header
+            info["n_images"] = int(h.get_data_shape()[2])
+            info["slice_mm"] = round(float(h.get_zooms()[2]), 2)
+        except Exception:
+            pass
+    return info
+
+
 class Store:
     def __init__(self, data: Path):
         self.data = Path(data)
@@ -71,8 +113,10 @@ class Store:
         self._lock = threading.Lock()
         with self._conn() as c:
             c.executescript(SCHEMA)
-            # resume after a restart
-            c.execute("UPDATE jobs SET status='queued' WHERE status='running'")
+            for table, col, decl in MIGRATIONS:
+                if col not in {r[1] for r in c.execute(f"PRAGMA table_info({table})")}:
+                    c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+            # a study that was being measured when the computer stopped is measured again
             c.execute("UPDATE cases SET status='queued', current_step='' WHERE status='running'")
 
     def _conn(self):
@@ -100,10 +144,12 @@ class Store:
     def case_dir(self, job_id: int, case_row_id: int) -> Path:
         return self.job_dir(job_id) / "cases" / str(case_row_id)
 
-    def create_job(self, label: str, user: str, settings: Settings, include_identifiers: bool) -> int:
-        jid = self.x("INSERT INTO jobs (label, submitted_by, created_at, status, settings_json, include_identifiers)"
-                     " VALUES (?,?,?,?,?,?)",
-                     (label, user, now(), "uploading", json.dumps(settings.to_dict()), int(include_identifiers)))
+    def create_job(self, label: str, user: str, settings: Settings, include_identifiers: bool,
+                   library: bool = False) -> int:
+        jid = self.x("INSERT INTO jobs (label, submitted_by, created_at, status, settings_json, include_identifiers,"
+                     " library) VALUES (?,?,?,?,?,?,?)",
+                     (label, user, now(), "uploading", json.dumps(settings.to_dict()), int(include_identifiers),
+                      int(library)))
         self.upload_dir(jid).mkdir(parents=True, exist_ok=True)
         return jid
 
@@ -112,79 +158,237 @@ class Store:
         self.x("DELETE FROM jobs WHERE id=?", (job_id,))
         shutil.rmtree(self.job_dir(job_id), ignore_errors=True)
 
+    # ---------- queue ----------
+    def next_queue_order(self) -> float:
+        return float(self.q("SELECT COALESCE(MAX(queue_order), 0) AS m FROM cases", one=True)["m"]) + 1
+
+    def add_cases(self, jid: int, cases: list[CaseInput], settings: Settings, queue: bool) -> None:
+        """Insert the studies found in an upload, either queued (measure now) or only stored."""
+        up = self.upload_dir(jid).resolve()
+        order = self.next_queue_order()
+        for i, case in enumerate(cases):
+            info = case_info(case)
+            cid = self.x("INSERT INTO cases (job_id, case_id, status, queue_order, info_json) VALUES (?,?,?,?,?)",
+                         (jid, case.case_id, "queued" if queue else "stored", order + i if queue else None,
+                          json.dumps(info)))
+            d = self.case_dir(jid, cid)
+            d.mkdir(parents=True, exist_ok=True)
+            rel = []
+            for f in case.study_files or ([case.path] if case.path else case.files):
+                p = Path(f).resolve()
+                if up in p.parents:
+                    rel.append(str(p.relative_to(up)))
+            (d / "files.json").write_text(json.dumps(rel))          # for deleting the study later
+            (d / "case.json").write_text(json.dumps({"case": case.to_dict(), "settings": settings.to_dict(),
+                                                     "out_dir": str(d)}))
+
+    def queue_cases(self, ids: list[int], overrides: dict) -> list[int]:
+        """Put stored library studies in the measuring queue, in the given order. Returns the ids queued."""
+        order = self.next_queue_order()
+        queued = []
+        for cid in ids:
+            row = self.q("SELECT c.*, j.library FROM cases c JOIN jobs j ON j.id = c.job_id WHERE c.id=?",
+                         (cid,), one=True)
+            if not row or not row["library"] or row["status"] in ("queued", "running"):
+                continue
+            f = self.case_dir(row["job_id"], cid) / "case.json"
+            try:
+                job = json.loads(f.read_text())
+            except (OSError, ValueError):
+                continue
+            job["settings"] = Settings.from_dict({**(job.get("settings") or {}), **overrides}).to_dict()
+            f.write_text(json.dumps(job))
+            self.x("UPDATE cases SET status='queued', queue_order=?, current_step='' WHERE id=?",
+                   (order + len(queued), cid))
+            queued.append(cid)
+        return queued
+
+    def unqueue_cases(self, ids: list[int]) -> list[int]:
+        """Take waiting library studies out of the queue again (back to stored, or to their last result)."""
+        done = []
+        for cid in ids:
+            row = self.q("SELECT c.*, j.library FROM cases c JOIN jobs j ON j.id = c.job_id WHERE c.id=?",
+                         (cid,), one=True)
+            if not row or not row["library"] or row["status"] != "queued":
+                continue
+            old = json.loads(row["result_json"]).get("status") if row.get("result_json") else None
+            self.x("UPDATE cases SET status=?, queue_order=NULL WHERE id=? AND status='queued'",
+                   (old if old in FINISHED else "stored", cid))
+            done.append(cid)
+        return done
+
+    def delete_case(self, cid: int) -> None:
+        """Delete one study: its scan files, results and row. An upload left empty is removed too."""
+        row = self.q("SELECT * FROM cases WHERE id=?", (cid,), one=True)
+        if not row:
+            return
+        jid = row["job_id"]
+        d = self.case_dir(jid, cid)
+        up = self.upload_dir(jid).resolve()
+        try:
+            rel = json.loads((d / "files.json").read_text())
+        except (OSError, ValueError):
+            rel = []
+        dirs = set()
+        for r in rel:
+            p = (up / r).resolve()
+            if up in p.parents:
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
+                dirs.update(q for q in p.parents if up in q.parents)
+        for q in sorted(dirs, key=lambda q: len(q.parts), reverse=True):   # remove folders left empty
+            try:
+                q.rmdir()
+            except OSError:
+                pass
+        shutil.rmtree(d, ignore_errors=True)
+        self.x("DELETE FROM cases WHERE id=?", (cid,))
+        left = self.q("SELECT COUNT(*) AS n FROM cases WHERE job_id=?", (jid,), one=True)["n"]
+        if left == 0:
+            self.delete_job(jid)
+        else:
+            done = self.q(f"SELECT COUNT(*) AS n FROM cases WHERE job_id=? AND status IN {FINISHED}",
+                          (jid,), one=True)["n"]
+            self.x("UPDATE jobs SET n_cases=?, n_done=? WHERE id=?", (left, done, jid))
+
+    def queue_positions(self) -> dict[int, int]:
+        """case id -> place in line (0 = being measured now, 1 = next, ...)."""
+        rows = self.q("SELECT id, status FROM cases WHERE status IN ('queued','running') "
+                      "ORDER BY status='running' DESC, COALESCE(queue_order, 0), id")
+        running = sum(1 for r in rows if r["status"] == "running")
+        return {r["id"]: (0 if r["status"] == "running" else i - running + 1) for i, r in enumerate(rows)}
+
+
+class Intake(threading.Thread):
+    """Reads each finished upload and finds its studies (runs beside the measuring worker)."""
+
+    def __init__(self, store: Store, keep_uploads: bool = False, on_ready=None):
+        super().__init__(daemon=True, name="liverhu-intake")
+        self.store = store
+        self.keep_uploads = keep_uploads
+        self.on_ready = on_ready or (lambda: None)
+        self.wake = threading.Event()
+
+    def run(self):
+        while True:
+            try:
+                busy = self.intake_once()
+            except Exception:          # never let the thread die
+                busy = False
+            if not busy:
+                self.wake.wait(timeout=3)
+                self.wake.clear()
+
+    def intake_once(self) -> bool:
+        s = self.store
+        job = s.q("SELECT * FROM jobs WHERE status='queued' ORDER BY id LIMIT 1", one=True)
+        if not job:
+            return False
+        jid, library = job["id"], bool(job.get("library"))
+        if s.q("SELECT COUNT(*) AS n FROM cases WHERE job_id=?", (jid,), one=True)["n"]:
+            # read before a restart (or by an older version): just carry on
+            s.x("UPDATE jobs SET status=? WHERE id=?", ("stored" if library else "running", jid))
+            self.on_ready()
+            return True
+        s.x("UPDATE jobs SET message='reading the files' WHERE id=?", (jid,))
+        settings = Settings.from_dict(json.loads(job["settings_json"] or "{}"))
+        try:
+            cases, warns = discover_cases(s.upload_dir(jid), label=job["label"] or "",
+                                          preferred_slice_mm=settings.preferred_slice_mm,
+                                          include_identifiers=bool(job["include_identifiers"]))
+            s.add_cases(jid, cases, settings, queue=not library)
+        except Exception as e:
+            cases, warns = [], [f"could not read the upload: {type(e).__name__}: {e}"]
+        msg = " | ".join(w for w in warns if cases or not w.startswith("No CT scans found"))
+        if not cases:
+            s.x("UPDATE jobs SET status='failed', message=? WHERE id=?", (msg or "no CT scans found in the upload", jid))
+            if library or not self.keep_uploads:
+                shutil.rmtree(s.upload_dir(jid), ignore_errors=True)
+            return True
+        s.x("UPDATE jobs SET status=?, n_cases=?, message=? WHERE id=?",
+            ("stored" if library else "running", len(cases), msg, jid))
+        self.on_ready()
+        return True
+
 
 class Worker(threading.Thread):
+    """Measures the queued studies one at a time, in queue order."""
+
     def __init__(self, store: Store, keep_uploads: bool = False):
         super().__init__(daemon=True, name="liverhu-worker")
         self.store = store
         self.keep_uploads = keep_uploads
         self.wake = threading.Event()
         self.current_proc: subprocess.Popen | None = None
+        self.current_case: int | None = None
 
     def run(self):
         while True:
-            job = self.store.q("SELECT * FROM jobs WHERE status='queued' ORDER BY id LIMIT 1", one=True)
-            if not job:
+            try:
+                busy = self.run_next()
+            except Exception:          # never let the worker thread die
+                busy = False
+            if not busy:
                 self.wake.wait(timeout=3)
                 self.wake.clear()
-                continue
-            try:
-                self._run_job(job)
-            except Exception as e:   # never let the worker thread die
-                self.store.x("UPDATE jobs SET status='failed', message=? WHERE id=?", (f"{type(e).__name__}: {e}", job["id"]))
 
-    def _run_job(self, job: dict):
+    def next_case(self) -> dict | None:
+        return self.store.q("SELECT c.* FROM cases c JOIN jobs j ON j.id = c.job_id "
+                            "WHERE c.status='queued' AND j.status IN ('running','stored') "
+                            "ORDER BY COALESCE(c.queue_order, 0), c.id LIMIT 1", one=True)
+
+    def run_next(self) -> bool:
+        row = self.next_case()
+        if not row:
+            return False
+        self._run_case(row["job_id"], row)
+        self._after_case(row["job_id"])
+        return True
+
+    def _after_case(self, jid: int) -> None:
         s = self.store
-        jid = job["id"]
-        s.x("UPDATE jobs SET status='running', message='finding scans' WHERE id=?", (jid,))
-        settings = Settings.from_dict(json.loads(job["settings_json"] or "{}"))
-        existing = s.q("SELECT id FROM cases WHERE job_id=?", (jid,))
-        if not existing:
-            up = s.upload_dir(jid)
-            cases, warns = discover_cases(up, label=job["label"] or "", preferred_slice_mm=settings.preferred_slice_mm,
-                                          include_identifiers=bool(job["include_identifiers"]))
-            for case in cases:
-                cid = s.x("INSERT INTO cases (job_id, case_id, status) VALUES (?,?,?)", (jid, case.case_id, "queued"))
-                d = s.case_dir(jid, cid)
-                d.mkdir(parents=True, exist_ok=True)
-                (d / "case.json").write_text(json.dumps({"case": case.to_dict(), "settings": settings.to_dict(),
-                                                         "out_dir": str(d)}))
-            s.x("UPDATE jobs SET n_cases=?, message=? WHERE id=?", (len(cases), " | ".join(warns), jid))
-        rows = s.q("SELECT * FROM cases WHERE job_id=? AND status='queued' ORDER BY id", (jid,))
-        for row in rows:
-            if (s.q("SELECT status FROM jobs WHERE id=?", (jid,), one=True) or {}).get("status") != "running":
-                return   # job deleted/cancelled meanwhile
-            self._run_case(jid, row)
-            done = s.q("SELECT COUNT(*) AS n FROM cases WHERE job_id=? AND status NOT IN ('queued','running')",
-                       (jid,), one=True)["n"]
-            s.x("UPDATE jobs SET n_done=? WHERE id=?", (done, jid))
-        total = s.q("SELECT COUNT(*) AS n FROM cases WHERE job_id=?", (jid,), one=True)["n"]
-        status = "done" if total else "failed"
-        msg = s.q("SELECT message FROM jobs WHERE id=?", (jid,), one=True)["message"] or ""
-        if not total and not msg:
-            msg = "no CT scans found in the upload"
-        s.x("UPDATE jobs SET status=?, message=? WHERE id=?", (status, msg, jid))
-        if not self.keep_uploads:
-            shutil.rmtree(s.upload_dir(jid), ignore_errors=True)
+        job = s.q("SELECT * FROM jobs WHERE id=?", (jid,), one=True)
+        if not job:
+            return            # deleted meanwhile
+        done = s.q(f"SELECT COUNT(*) AS n FROM cases WHERE job_id=? AND status IN {FINISHED}", (jid,), one=True)["n"]
+        s.x("UPDATE jobs SET n_done=? WHERE id=?", (done, jid))
+        if job.get("library") or job["status"] != "running":
+            return
+        left = s.q("SELECT COUNT(*) AS n FROM cases WHERE job_id=? AND status IN ('queued','running')",
+                   (jid,), one=True)["n"]
+        if not left:
+            s.x("UPDATE jobs SET status='done' WHERE id=?", (jid,))
+            if not self.keep_uploads:
+                shutil.rmtree(s.upload_dir(jid), ignore_errors=True)
+
+    def stop_case(self, cid: int) -> None:
+        """Stop measuring this study now (it is being deleted)."""
+        if self.current_case == cid and self.current_proc:
+            self.current_proc.kill()
 
     def _run_case(self, jid: int, row: dict):
         s = self.store
         d = s.case_dir(jid, row["id"])
         relocate_case_file(d)
+        for old in ("result.json", "qa.png"):     # measured before (library): start clean
+            (d / old).unlink(missing_ok=True)
         s.x("UPDATE cases SET status='running', started_at=?, current_step='starting' WHERE id=?", (now(), row["id"]))
         t0 = time.time()
         pkg_root = str(Path(__file__).resolve().parents[2])
         env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8",
                    PYTHONPATH=pkg_root + (os.pathsep + os.environ["PYTHONPATH"] if os.environ.get("PYTHONPATH") else ""))
         log_path = d / "log.txt"
-        with open(log_path, "w", encoding="utf-8") as log:
-            # below-normal priority keeps the computer responsive while a scan is measured
-            extra = {"creationflags": subprocess.BELOW_NORMAL_PRIORITY_CLASS} if os.name == "nt" else {}
-            proc = subprocess.Popen([sys.executable, "-m", "liverhu.worker", str(d / "case.json")],
-                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env,
-                                    encoding="utf-8", errors="replace", bufsize=1, **extra)
-            self.current_proc = proc
-            try:
+        self.current_case = row["id"]
+        try:
+            with open(log_path, "w", encoding="utf-8") as log:
+                # below-normal priority keeps the computer responsive while a scan is measured
+                extra = {"creationflags": subprocess.BELOW_NORMAL_PRIORITY_CLASS} if os.name == "nt" else {}
+                proc = subprocess.Popen([sys.executable, "-m", "liverhu.worker", str(d / "case.json")],
+                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env,
+                                        encoding="utf-8", errors="replace", bufsize=1, **extra)
+                self.current_proc = proc
                 for line in proc.stdout:
                     log.write(line)
                     log.flush()
@@ -195,15 +399,19 @@ class Worker(threading.Thread):
                         proc.kill()
                         break
                 proc.wait(timeout=60)
-            finally:
-                self.current_proc = None
+        except OSError:
+            proc = None           # the study was deleted while it was being measured
+        finally:
+            self.current_proc = None
+            self.current_case = None
         res_path = d / "result.json"
         if res_path.exists():
             res = json.loads(res_path.read_text())
             status = res.get("status", "failed")
         else:
             tail = log_path.read_text(encoding="utf-8", errors="replace")[-1500:] if log_path.exists() else ""
-            hint = " (the computer may have run out of memory)" if proc.returncode not in (0, None) else ""
+            code = proc.returncode if proc else None
+            hint = " (the computer may have run out of memory)" if code not in (0, None) else ""
             res = {"case_id": row["case_id"], "status": "failed",
                    "error": f"processing stopped unexpectedly{hint}", "log_tail": tail, "flags": []}
             status = "failed"
