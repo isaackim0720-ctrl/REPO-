@@ -67,3 +67,6 @@ code { background: var(--bg); padding: 1px 5px; border-radius: 4px; border: 1px 
 .canvas-wrap img { display: block; width: 100%; height: auto; user-select: none; -webkit-user-drag: none; }
 .canvas-wrap svg { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; }
 .readout th { width: 90px; } .readout td { font-size: 16px; }
+
+/* the hidden attribute must win over button/display rules */
+[hidden] { display: none !important; }
