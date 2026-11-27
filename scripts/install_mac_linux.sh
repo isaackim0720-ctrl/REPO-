@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Liver HU - one-time install on the computer that will run the website (macOS or Linux).
+# HUnter - one-time install on the computer that will run the website (macOS or Linux).
 # Needs internet; downloads about 1.5 GB and takes 10-20 minutes.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 # Some medical-imaging packages only ship ready-made builds for Python 3.10-3.14.
 ok_py() { "$1" -c 'import sys; sys.exit(0 if (3, 10) <= sys.version_info[:2] <= (3, 14) else 1)' >/dev/null 2>&1; }
 
-echo "== Liver HU installer: 10-20 minutes, about 1.5 GB download. Keep this window open. =="
+echo "== HUnter installer: 10-20 minutes, about 1.5 GB download. Keep this window open. =="
 
 # An install folder made with an unsupported Python (e.g. 3.15) is removed and redone.
 if [ -x .venv/bin/python ] && ! ok_py .venv/bin/python; then

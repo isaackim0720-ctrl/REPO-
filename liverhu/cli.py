@@ -73,7 +73,7 @@ def _cmd_serve(a) -> int:
         hw = _HW.get(device_name(), device_name())
     except Exception:
         hw = "CPU"
-    print(f"\nLiver HU website v{__version__} (liver + spleen){mode} running. AI runs on: {hw}")
+    print(f"\nHUnter website v{__version__} (liver + spleen){mode} running. AI runs on: {hw}")
     print(f"  On this computer open:      http://localhost:{a.port}")
     for ip in ips:
         print(f"  Others on the network open: http://{ip}:{a.port}")

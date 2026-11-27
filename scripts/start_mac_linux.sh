@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Starts the Liver HU website. Keep this terminal open while people use it.
+# Starts the HUnter website. Keep this terminal open while people use it.
 # On computers with 8 GB RAM or less, low-memory mode is switched on automatically
 # (set LIVERHU_LOW_MEMORY=0 to prevent that, or add --low-memory to force it).
 set -euo pipefail

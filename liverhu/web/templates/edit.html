@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}Adjust circles · {{ case.case_id }} · Liver HU{% endblock %}
+{% block title %}Adjust circles · {{ case.case_id }} · HUnter{% endblock %}
 {% block content %}
 <section class="card">
   <div class="row" style="justify-content:space-between;align-items:center">
     <h1>Adjust circles · {{ case.case_id }}</h1>
-    <a class="btn" href="/jobs/{{ case.job_id }}">← Back to results</a>
+    <a class="btn" href="/jobs/{{ case.job_id }}">Back to results</a>
   </div>
   <p class="muted small">Pick a circle, then <b>click or drag</b> on the image to move it. Arrow keys move it one pixel;
     the slice buttons (or Page Up / Page Down) change the slice. The numbers update as you move. Press <b>Save this circle</b>
@@ -23,7 +23,7 @@
       <button id="up" type="button" title="Page Up">Slice toward head ▲</button>
     </div>
     <p id="zinfo" class="small muted"></p>
-    <p class="small muted">Outlines: <span class="roi-ll">segments 2/3</span> · <span style="color:#65a30d">segment 4</span> · <span class="roi-rl1">segments 5–8</span> · <span class="roi-spl">spleen</span> · <span style="color:#ca8a04">falciform ligament (est.)</span>. Patient's right is on the left of the image.</p>
+    <div class="legend"><span><i style="background:#00e5ff"></i>segments 2/3</span><span><i style="background:#9cff57"></i>segment 4</span><span><i style="background:#ff4dd2"></i>segments 5–8</span><span><i style="background:#4ade80"></i>spleen</span><span><i style="background:#ffff00"></i>falciform ligament (estimated)</span><span>Patient's right is on the left of the image</span></div>
   </section>
   <section class="card">
     <h2 id="roiname">…</h2>

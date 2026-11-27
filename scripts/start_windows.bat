@@ -1,5 +1,5 @@
 @echo off
-REM Starts the Liver HU website. Keep this window open while people use it.
+REM Starts the HUnter website. Keep this window open while people use it.
 REM Add --low-memory after "serve" if the computer runs short of memory.
 cd /d "%~dp0\.."
 if not exist .venv\Scripts\python.exe (

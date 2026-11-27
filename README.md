@@ -1,4 +1,6 @@
-# Liver HU: automatic liver (3-circle) and spleen attenuation from CT
+# HUnter: automatic liver (3-circle) and spleen attenuation from CT
+
+*HUnter hunts down the Hounsfield units (HU) of the liver and spleen on CT.*
 
 Upload a CT scan and get the Hounsfield-unit (HU) values a reader would measure with
 circular ROIs, three in the liver and one in the spleen:

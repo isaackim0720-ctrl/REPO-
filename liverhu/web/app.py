@@ -69,15 +69,15 @@ def create_app(data: Path, keep_uploads: bool = False, start_worker: bool = True
             worker.start()
         yield
 
-    app = FastAPI(title="Liver HU", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+    app = FastAPI(title="HUnter", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.store, app.state.worker = store, worker
     templates = Jinja2Templates(directory=str(HERE / "templates"))
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
-    security = HTTPBasic(realm="Liver HU lab website")
+    security = HTTPBasic(realm="HUnter lab website")
 
     def user(creds: HTTPBasicCredentials = Depends(security)) -> str:
         if not auth.check_password(data, creds.password):
-            raise HTTPException(401, "Wrong password", headers={"WWW-Authenticate": 'Basic realm="Liver HU"'})
+            raise HTTPException(401, "Wrong password", headers={"WWW-Authenticate": 'Basic realm="HUnter"'})
         return (creds.username or "lab").strip()[:60] or "lab"
 
     def page(request: Request, name: str, **ctx):

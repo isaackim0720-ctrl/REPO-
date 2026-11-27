@@ -3,23 +3,30 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Liver HU{% endblock %}</title>
+  <meta name="color-scheme" content="dark">
+  <title>{% block title %}HUnter{% endblock %}</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 26 26'%3E%3Crect width='26' height='26' rx='5' fill='%231e242c'/%3E%3Ccircle cx='13' cy='13' r='7' fill='none' stroke='%23d9e0e7' stroke-width='2'/%3E%3Cpath d='M13 2v5M13 19v5M2 13h5M19 13h5' stroke='%23d9e0e7' stroke-width='2'/%3E%3C/svg%3E">
+  <link rel="preload" href="/static/fonts/archivo-variable.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/static/style.css?v={{ version }}">
 </head>
 <body>
   <header class="top">
-    <a href="/" class="brand">Liver HU <span>automatic 3-circle liver attenuation</span></a>
+    <a href="/" class="brand" aria-label="HUnter home">
+      <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><circle cx="13" cy="13" r="7.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M13 1.5v5M13 19.5v5M1.5 13h5M19.5 13h5" stroke="currentColor" stroke-width="2"/></svg>
+      <span class="wordmark"><b>HU</b><span>nter</span></span>
+      <span class="brand-sub">liver &amp; spleen attenuation</span>
+    </a>
     <nav>
-      <a href="/">Uploads</a>
-      <a href="/download/results.xlsx">All results (Excel)</a>
-      <a href="/about">How it works</a>
+      <a href="/" {% if active == "measure" %}aria-current="page"{% endif %}>Measure</a>
+      <a href="/download/results.xlsx">Export all to Excel</a>
+      <a href="/about" {% if active == "about" %}aria-current="page"{% endif %}>How it works</a>
     </nav>
-    <span class="who" title="Signed in name">{{ user }}</span>
+    <span class="who" title="Signed in as">{{ user }}</span>
   </header>
   <main>
     {% block content %}{% endblock %}
   </main>
-  <footer>Research use only, not for clinical diagnosis. Check the QA image of every case. &middot; v{{ version }}</footer>
+  <footer>Research use only, not for clinical diagnosis. Check the image of every study before using its numbers. HUnter v{{ version }}</footer>
   <script src="/static/app.js?v={{ version }}"></script>
   {% block scripts %}{% endblock %}
 </body>

@@ -1,8 +1,9 @@
 {% extends "base.html" %}
-{% block title %}How it works · Liver HU{% endblock %}
+{% set active = "about" %}
+{% block title %}How it works · HUnter{% endblock %}
 {% block content %}
-<section class="card">
-  <h1>How the measurement works</h1>
+<section class="card prose">
+  <h1>How HUnter measures</h1>
   <ol>
     <li><b>Find the scan.</b> In each uploaded study the axial CT series is chosen automatically, preferring a non-contrast series and a slice thickness near {{ defaults.preferred_slice_mm }} mm. Which series was used is shown with every result.</li>
     <li><b>Outline the liver.</b> The AI model <i>TotalSegmentator</i>, trained on real CT scans, outlines the liver and its 8 Couinaud segments. A coarse 6 mm model first finds the liver, then the liver-segment model runs on that region only, so an 8 GB lab PC can run it.</li>

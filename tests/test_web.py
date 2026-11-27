@@ -22,7 +22,7 @@ def test_password_required(client):
     assert c.get("/").status_code == 401
     assert c.get("/", auth=("maria", "wrong-password")).status_code == 401
     r = c.get("/", auth=("maria", PW))
-    assert r.status_code == 200 and "Measure liver HU" in r.text
+    assert r.status_code == 200 and "Measure a study" in r.text and "HUnter" in r.text
 
 
 def test_upload_flow_and_downloads(client, tmp_path):

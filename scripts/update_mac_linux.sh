@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Update Liver HU to the latest version on GitHub.
+# Update HUnter to the latest version on GitHub.
 # Keeps the install (.venv), the website password and all results (liverhu_data/).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 [ -x .venv/bin/python ] || { echo "Not installed here yet - run: bash scripts/install_mac_linux.sh"; exit 1; }
-[ -d liverhu ] || { echo "This does not look like the Liver HU folder; nothing changed."; exit 1; }
+[ -d liverhu ] || { echo "This does not look like the HUnter folder; nothing changed."; exit 1; }
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
 echo "Downloading the latest version..."

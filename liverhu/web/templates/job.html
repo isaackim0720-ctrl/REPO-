@@ -1,22 +1,22 @@
 {% extends "base.html" %}
-{% block title %}Upload {{ job.id }} · Liver HU{% endblock %}
+{% block title %}{{ job.label or ("Upload " ~ job.id) }} · HUnter{% endblock %}
 {% block content %}
 <section class="card">
   <div class="row" style="justify-content:space-between;align-items:start">
     <div>
-      <h1>Upload #{{ job.id }} {% if job.label %}· {{ job.label }}{% endif %}</h1>
-      <p class="muted small">by {{ job.submitted_by }} · {{ job.created_at.replace('T', ' ') }}</p>
+      <h1>{{ job.label or ("Upload " ~ job.id) }}</h1>
+      <p class="muted small">Upload {{ job.id }}, by {{ job.submitted_by }}, {{ job.created_at.replace('T', ' ')[:16] }}</p>
     </div>
     <div class="row">
-      <a class="btn" href="/download/results.xlsx?job={{ job.id }}">Download Excel</a>
-      <a class="btn" href="/download/results.csv?job={{ job.id }}">Download CSV</a>
+      <a class="btn" href="/download/results.xlsx?job={{ job.id }}">Export Excel</a>
+      <a class="btn" href="/download/results.csv?job={{ job.id }}">Export CSV</a>
     </div>
   </div>
-  <p><span id="status" class="badge">…</span> <span id="progress" class="small"></span></p>
+  <p style="margin:6px 0 0"><span id="status" class="badge">…</span> <span id="progress" class="small"></span></p>
   <div class="progress"><div id="bar"></div></div>
-  <p id="message" class="small muted"></p>
+  <p id="message" class="small muted" style="margin-top:8px"></p>
 </section>
 <div id="cases"></div>
-<div id="lightbox" class="lightbox" onclick="this.style.display='none'"><img alt="QA image"></div>
+<div id="lightbox" class="lightbox" onclick="this.style.display='none'"><img alt="Check image"></div>
 {% endblock %}
 {% block scripts %}<script>initJob({{ job.id }});</script>{% endblock %}

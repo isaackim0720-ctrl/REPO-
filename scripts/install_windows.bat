@@ -1,14 +1,14 @@
 @echo off
 setlocal
-REM Liver HU - one-time install on the lab computer that will run the website.
+REM HUnter - one-time install on the lab computer that will run the website.
 REM Needs internet. Downloads about 1.5 GB and takes 10-20 minutes.
-title Liver HU installer - keep this window open
+title HUnter installer - keep this window open
 cd /d "%~dp0.."
 if not exist "requirements.txt" goto :notunzipped
 
 echo.
 echo ==================================================================
-echo   Liver HU installer
+echo   HUnter installer
 echo   Takes 10-20 minutes and downloads about 1.5 GB.
 echo   The computer may be slower meanwhile. Do NOT close this window.
 echo ==================================================================

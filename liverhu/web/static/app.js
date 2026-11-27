@@ -1,4 +1,4 @@
-// Liver HU lab website - browser side (no external libraries).
+// HUnter lab website - browser side (no external libraries).
 "use strict";
 
 const $ = (id) => document.getElementById(id);
@@ -119,15 +119,16 @@ async function refreshJobs() {
     const d = await getJSON("/api/jobs");
     const rows = d.jobs.map((j) => {
       const pct = j.n_cases ? Math.round((100 * j.n_done) / j.n_cases) : 0;
+      const label = { done: "measured", running: "measuring", queued: "waiting", uploading: "uploading", failed: "failed", cancelled: "cancelled" }[j.status] || j.status;
       return `<tr>
-        <td>${j.id}</td><td><a href="/jobs/${j.id}">${esc(j.label || "(no name)")}</a></td>
-        <td>${esc(j.submitted_by)}</td><td class="small">${esc((j.created_at || "").replace("T", " "))}</td>
-        <td><span class="badge ${esc(j.status)}">${esc(j.status)}</span></td>
-        <td class="small">${j.n_cases ? `${j.n_done}/${j.n_cases} scans (${pct}%)` : esc(j.status === "uploading" ? `${j.n_files} files received` : j.message || "")}</td>
-        <td><a href="/jobs/${j.id}">Open</a> · <a href="#" onclick="delJob(${j.id});return false" class="small">Delete</a></td></tr>`;
+        <td class="muted">${j.id}</td><td><a href="/jobs/${j.id}">${esc(j.label || "Upload " + j.id)}</a></td>
+        <td>${esc(j.submitted_by)}</td><td class="small muted">${esc((j.created_at || "").replace("T", " ").slice(0, 16))}</td>
+        <td><span class="badge ${esc(j.status)}">${esc(label)}</span></td>
+        <td class="small">${j.n_cases ? `${j.n_done} of ${j.n_cases} studies` : esc(j.status === "uploading" ? `${j.n_files} files received` : j.message || "")}</td>
+        <td class="small"><a href="/jobs/${j.id}">Open</a>&nbsp;&nbsp;<a href="#" onclick="delJob(${j.id});return false">Delete</a></td></tr>`;
     });
-    $("jobs").innerHTML = rows.join("") || `<tr><td colspan="7" class="muted">No uploads yet.</td></tr>`;
-    $("queue").textContent = d.cases_waiting ? `${d.cases_waiting} scan(s) waiting` + (d.avg_seconds_per_case ? ` · about ${mins(d.cases_waiting * d.avg_seconds_per_case)} left` : "") : "Idle";
+    $("jobs").innerHTML = rows.join("") || `<tr><td colspan="7" class="muted">Nothing measured yet. Drop a study above to start.</td></tr>`;
+    $("queue").textContent = d.cases_waiting ? `${d.cases_waiting} studies waiting` + (d.avg_seconds_per_case ? `, about ${mins(d.cases_waiting * d.avg_seconds_per_case)} left` : "") : "Ready";
   } catch (e) { /* keep last view */ }
 }
 
@@ -140,42 +141,82 @@ async function delJob(id) {
 // ---------- job page ----------
 const ROIS = [["LL", "Left lobe", "roi-ll"], ["RL1", "Right lobe 1 (front)", "roi-rl1"], ["RL2", "Right lobe 2 (back)", "roi-rl2"], ["SPL", "Spleen", "roi-spl"]];
 
+const WARN_ICON = `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5 15 14H1z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M8 6v4" stroke="currentColor" stroke-width="1.6"/><circle cx="8" cy="12" r=".9" fill="currentColor"/></svg>`;
+const ROI_HEX = { LL: "#2fd3e8", RL1: "#f25cc8", RL2: "#f2a93b", SPL: "#5dd68a" };
+const WIN = [-160, 240];   // the same grayscale window as the check images
+
+function huWarn(r) {
+  if (!r.hu_check) return "";
+  const t = `${r.hu_check === "low" ? "Too low" : "Too high"}${r.hu_range ? `: expected ${fmt(r.hu_range[0], 0)}–${fmt(r.hu_range[1], 0)} HU` : ""}`;
+  return `<span class="huwarn" title="${esc(t)}">${WARN_ICON}${r.hu_check}</span>`;
+}
+
+// HU ruler: grayscale bar in the image window, expected ranges as brackets, circles as markers
+function huRuler(c) {
+  const pct = (hu) => ((Math.max(WIN[0], Math.min(WIN[1], hu)) - WIN[0]) / (WIN[1] - WIN[0])) * 100;
+  const band = (rng, cls, label) => (rng ? `<div class="band ${cls}" style="left:${pct(rng[0])}%;width:${pct(rng[1]) - pct(rng[0])}%"><span>${label} ${fmt(rng[0], 0)}–${fmt(rng[1], 0)} HU</span></div>` : "");
+  let marks = "", desc = [];
+  const placedAt = [];                       // nudge dots that would sit on top of each other
+  for (const k of ["LL", "RL1", "RL2", "SPL"]) {
+    const r = c[k] || {};
+    if (!r.placed || r.mean_hu === null || r.mean_hu === undefined) continue;
+    const t = `${k} ${fmt(r.mean_hu)} HU${r.hu_check ? ", " + r.hu_check : ""}`;
+    desc.push(t);
+    const p = pct(r.mean_hu);
+    const n = k === "SPL" ? 0 : placedAt.filter((q) => Math.abs(q - p) < 2.2).length;
+    if (k !== "SPL") placedAt.push(p);
+    const dx = n === 0 ? 0 : (n % 2 ? 1 : -1) * Math.ceil(n / 2) * 11;
+    marks += `<div class="mk${k === "SPL" ? " below" : ""}${r.hu_check ? " out" : ""}" style="left:${p}%;--c:${ROI_HEX[k]};--dx:${dx}px" title="${esc(t)}"></div>`;
+  }
+  const ticks = [-100, 0, 100, 200].map((t) => `<span class="tick" style="left:${pct(t)}%">${t}</span>`).join("");
+  return `<div class="ruler" role="img" aria-label="${esc("Mean HU: " + desc.join("; "))}"><div class="bar"></div>
+    ${band((c.LL || {}).hu_range, "liver", "expected liver")}${band((c.SPL || {}).hu_range, "spleen", "expected spleen")}${marks}${ticks}</div>`;
+}
+
 function caseCard(c) {
   const done = ["ok", "partial", "failed"].includes(c.status);
   const rows = ROIS.map(([k, name, cls]) => {
     const r = c[k] || {};
-    if (!done) return "";
-    if (r.placed === undefined || r.placed === null) return "";   // e.g. spleen not measured in older results
-    if (!r.placed) return `<tr><td class="${cls}">${k}</td><td colspan="7" class="error">not placed</td></tr>`;
-    const where = k === "SPL" ? "spleen" : `seg ${esc(r.segment_at_center)} · ${esc(r.side_of_ligament)}${r.side_ok ? "" : " ⚠"}`;
+    if (!done || r.placed === undefined || r.placed === null) return "";
+    if (!r.placed) return `<tr><td class="${cls}">${k}</td><td colspan="6" class="error">not placed</td></tr>`;
+    const where = k === "SPL" ? "spleen" : `segment ${esc(r.segment_at_center)}, ${esc(r.side_of_ligament)}${r.side_ok ? "" : " (check side)"}`;
     return `<tr><td class="${cls}" title="${esc(name)}">${k}</td>
-      <td class="num">${fmt(r.mean_hu)}${r.hu_check ? ` <span class="huwarn" title="${r.hu_check === "low" ? "Too low" : "Too high"}${r.hu_range ? `: expected ${fmt(r.hu_range[0], 0)}–${fmt(r.hu_range[1], 0)} HU` : ""}">⚠ ${r.hu_check === "low" ? "low" : "high"}</span>` : ""}</td><td class="num">${fmt(r.sd_hu)}</td>
+      <td class="num">${fmt(r.mean_hu)}${huWarn(r)}</td><td class="num">${fmt(r.sd_hu)}</td>
       <td class="num">${fmt(r.min_hu, 0)}</td><td class="num">${fmt(r.max_hu, 0)}</td>
-      <td class="num">${fmt(r.area_cm2, 2)}</td><td class="num small">${fmt(r.z_mm)}${r.dicom_instance ? ` (#${r.dicom_instance})` : ""}</td>
-      <td class="small">${where}${r.manual ? ` · <b title="moved by hand">✎ ${esc(r.edited_by || "")}</b>` : ""}</td></tr>`;
+      <td class="num">${fmt(r.area_cm2, 2)}</td>
+      <td class="small">${where}${r.manual ? `, <span title="moved by hand">moved by ${esc(r.edited_by || "hand")}</span>` : ""}</td></tr>`;
   }).join("");
-  const flags = (c.flags || []).length ? `<ul class="flags">${c.flags.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>` : "";
-  const qBadge = { good: ["ok", "✓ Good quality"], check: ["partial", "⚠ Check"], poor: ["failed", "✕ Poor quality"] }[c.quality] || null;
+  const z = c.LL && c.LL.placed ? `${fmt(c.LL.z_mm)} mm${c.LL.dicom_instance ? `, image ${c.LL.dicom_instance}` : ""}` : "";
+  const qBadge = { good: ["ok", "Good quality"], check: ["partial", "Check"], poor: ["failed", "Poor quality"] }[c.quality] || null;
   const notes = [...(c.completeness_notes || []), ...(c.quality_notes || [])];
-  const checks = done && c.quality ? `<p class="small">${qBadge ? `<span class="badge ${qBadge[0]}">${qBadge[1]}</span>` : ""}
-      ${c.scan_complete === false ? ` <span class="badge failed">Incomplete scan</span>` : ""}
-      <span class="muted"> · ${esc(c.contrast_phase || "")}${c.contrast_reason ? ` (${esc(c.contrast_reason)})` : ""}</span></p>
-      ${notes.length ? `<ul class="small qnotes">${notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}` : "";
-  const img = c.has_qa ? `<img src="/cases/${c.id}/qa.png?r=${c.revision || 0}" alt="QA image for ${esc(c.case_id)}" onclick="openImg(this.src)">`
-    : `<div class="muted small">${done ? "No image" : "Image appears when the scan is finished."}</div>`;
+  const flags = (c.flags || []).filter((f) => !/ mean HU is /.test(f));
+  const img = c.has_qa ? `<img src="/cases/${c.id}/qa.png?r=${c.revision || 0}" alt="Check image for ${esc(c.case_id)}" onclick="openImg(this.src)">`
+    : `<div class="wait">${done ? "No image" : "The check image appears when the study is measured."}</div>`;
   const elapsed = c.status === "running" && c.started_at ? Math.max(0, (Date.now() - Date.parse(c.started_at)) / 1000) : null;
-  const status = c.status === "running" ? `${esc(c.step || "starting")}${elapsed !== null ? ` · ${mins(elapsed)} so far` : ""}` : c.status;
-  return `<section class="card"><div class="row" style="justify-content:space-between;align-items:center">
-      <h2>${esc(c.case_id)}</h2>
-      <span><span class="badge ${esc(c.status)}">${esc(status)}</span>
-      ${c.seconds ? `<span class="small muted">${mins(c.seconds)}</span>` : ""}</span></div>
-    <div class="case"><div>${img}</div><div>
-      ${done && c.status !== "failed" ? `<p class="small muted">Liver mean of 3 circles: <b>${fmt(c.liver_mean)} HU</b>${c.spleen_mean !== null && c.spleen_mean !== undefined ? ` · spleen <b>${fmt(c.spleen_mean)} HU</b> · liver − spleen <b>${fmt(c.l_minus_s)} HU</b> · liver/spleen <b>${fmt(c.l_s_ratio, 2)}</b>` : ""} · series: ${esc(c.series || "?")} · slice ${fmt(c.slice_mm, 2)} mm</p>` : ""}
-      ${checks}
+  const running = c.status === "running" ? `${esc(c.step || "starting")}${elapsed !== null ? `, ${mins(elapsed)} so far` : ""}` : "";
+  const measured = done && c.status !== "failed";
+  return `<section class="card">
+    <div class="study-head"><h2>${esc(c.case_id)}</h2>
+      <div class="status-line">
+        ${measured && qBadge ? `<span class="badge ${qBadge[0]}">${qBadge[0] === "ok" ? "" : WARN_ICON.replace("<svg", '<svg width="12" height="12"')}${qBadge[1]}</span>` : ""}
+        ${measured && c.scan_complete === false ? `<span class="badge failed">Incomplete scan</span>` : ""}
+        ${!measured ? `<span class="badge ${esc(c.status)}">${esc(c.status === "running" ? "measuring" : c.status)}</span>` : ""}
+        ${c.seconds ? `<span class="small muted">${mins(c.seconds)}</span>` : ""}
+      </div></div>
+    ${running ? `<p class="small">${running}</p>` : ""}
+    <div class="study"><div class="viewer">${img}</div><div>
       ${c.error ? `<p class="error small">${esc(c.error)}</p>` : ""}
-      ${rows ? `<div class="table-wrap"><table><thead><tr><th>ROI</th><th class="num">Mean HU</th><th class="num">SD</th><th class="num">Min</th><th class="num">Max</th><th class="num">Area cm²</th><th class="num">z mm (image)</th><th>Where</th></tr></thead><tbody>${rows}</tbody></table></div>` : ""}
-      ${flags}
-      ${done ? `<p class="small">${c.editable ? `<a class="btn" href="/cases/${c.id}/edit">Adjust circles</a> &nbsp;` : ""}<a href="/cases/${c.id}/result.json" target="_blank">all values (JSON)</a> · <a href="/cases/${c.id}/log.txt" target="_blank">log</a></p>` : ""}
+      ${rows ? `<div class="table-wrap"><table class="measures"><thead><tr><th>Circle</th><th class="num">Mean HU</th><th class="num">SD</th><th class="num">Min</th><th class="num">Max</th><th class="num">cm²</th><th>Where</th></tr></thead><tbody>${rows}</tbody></table></div>` : ""}
+      ${measured ? huRuler(c) : ""}
+      ${measured ? `<dl class="stats">
+          <div><dt>Liver mean</dt><dd>${fmt(c.liver_mean)} <small>HU</small></dd></div>
+          <div><dt>Spleen</dt><dd>${fmt(c.spleen_mean)} <small>HU</small></dd></div>
+          <div><dt>Liver − spleen</dt><dd>${fmt(c.l_minus_s)} <small>HU</small></dd></div>
+          <div><dt>Liver / spleen</dt><dd>${fmt(c.l_s_ratio, 2)}</dd></div></dl>
+        <p class="small muted">Liver circles on the slice at ${esc(z)}. ${esc(c.contrast_phase ? c.contrast_phase.charAt(0).toUpperCase() + c.contrast_phase.slice(1) : "")}${c.contrast_reason ? ` (${esc(c.contrast_reason)})` : ""}. Series ${esc(c.series || "?")}, ${fmt(c.slice_mm, 2)} mm slices.</p>` : ""}
+      ${notes.length ? `<ul class="qnotes">${notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
+      ${flags.length ? `<ul class="flags">${flags.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>` : ""}
+      ${done ? `<div class="study-actions">${c.editable ? `<a class="btn" href="/cases/${c.id}/edit">Adjust circles</a>` : ""}<a href="/cases/${c.id}/result.json" target="_blank">All values (JSON)</a><a href="/cases/${c.id}/log.txt" target="_blank">Log</a></div>` : ""}
     </div></div></section>`;
 }
 
@@ -186,7 +227,7 @@ async function refreshJob(id) {
   const d = await getJSON(`/api/jobs/${id}`);
   const j = d.job;
   $("status").className = "badge " + j.status;
-  $("status").textContent = j.status;
+  $("status").textContent = { done: "measured", running: "measuring", queued: "waiting", uploading: "uploading" }[j.status] || j.status;
   const pct = j.n_cases ? (100 * j.n_done) / j.n_cases : 0;
   $("bar").style.width = pct + "%";
   let p = j.n_cases ? `${j.n_done} of ${j.n_cases} scan(s) measured` : (j.status === "queued" ? "waiting for the computer…" : "");
@@ -270,7 +311,7 @@ async function initEditor(caseId) {
       s.x = m.x; s.y = m.y; s.z = m.z;          // server keeps the circle inside the image
       const rng = (info.hu_ranges || {})[key];
       const hw = rng && m.mean_hu < rng[0] ? "low" : (rng && m.mean_hu > rng[1] ? "high" : "");
-      $("r_mean").innerHTML = esc(fmt(m.mean_hu) + " HU") + (hw ? ` <span class="huwarn" title="expected ${fmt(rng[0], 0)}–${fmt(rng[1], 0)} HU (${esc(info.contrast_phase || "")})">⚠ ${hw}</span>` : "");
+      $("r_mean").innerHTML = esc(fmt(m.mean_hu) + " HU") + (hw ? ` <span class="huwarn" title="expected ${fmt(rng[0], 0)}–${fmt(rng[1], 0)} HU (${esc(info.contrast_phase || "")})">${WARN_ICON}${hw}</span>` : "");
       $("r_sd").textContent = fmt(m.sd_hu);
       $("r_min").textContent = fmt(m.min_hu, 0); $("r_max").textContent = fmt(m.max_hu, 0);
       $("r_area").textContent = fmt(m.area_cm2, 2) + " cm²";

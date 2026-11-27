@@ -53,7 +53,7 @@ def ensure_cert(data: Path) -> tuple[Path, Path]:
         names.append(x509.DNSName(host))
     for ip in local_ips():
         names.append(x509.IPAddress(ipaddress.ip_address(ip)))
-    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Liver HU lab website")])
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "HUnter lab website")])
     now = dt.datetime.now(dt.timezone.utc)
     cert = (x509.CertificateBuilder()
             .subject_name(subject).issuer_name(subject)

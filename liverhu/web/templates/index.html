@@ -1,48 +1,52 @@
 {% extends "base.html" %}
+{% set active = "measure" %}
+{% block title %}Measure · HUnter{% endblock %}
 {% block content %}
-<section class="card">
-  <h1>Measure liver HU</h1>
-  <p class="muted">Upload CT scans exported from your database. Each study gets three circles: <span class="roi-ll">LL</span> (left lobe, left of the falciform ligament), <span class="roi-rl1">RL1</span> (right lobe, front) and <span class="roi-rl2">RL2</span> (right lobe, back), all on one slice, plus one in the spleen (<span class="roi-spl">SPL</span>). You get mean, SD, min and max HU and the circle size, liver − spleen and liver/spleen, plus a picture to check placement.</p>
-  <div id="drop" class="drop">
-    <div class="big">Drag a folder of DICOM files, .zip files, or .nii / .nii.gz files here</div>
-    <p class="muted small">A folder may hold many patients/studies; each study is measured separately.</p>
-    <button type="button" onclick="document.getElementById('pickFolder').click()">Choose folder…</button>
-    <button type="button" onclick="document.getElementById('pickFiles').click()">Choose files…</button>
+<h1>Measure a study</h1>
+<p class="muted">Three circles on one liver slice (left lobe, right lobe front, right lobe back) and one in the spleen. You get mean HU, SD, min, max, circle size, liver − spleen, liver/spleen and a picture of every circle.</p>
+<div class="measure">
+  <section id="drop" class="viewport-drop" aria-label="Drop scans here">
+    <svg width="40" height="40" viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="11" fill="none" stroke="#8e9aa8" stroke-width="1.5"/><path d="M20 3v8M20 29v8M3 20h8M29 20h8" stroke="#8e9aa8" stroke-width="1.5"/></svg>
+    <div class="big">Drop a study here</div>
+    <p class="muted small">A DICOM folder (many patients at once is fine), .zip files, or .nii / .nii.gz</p>
+    <div class="row">
+      <button type="button" onclick="document.getElementById('pickFolder').click()">Choose folder</button>
+      <button type="button" onclick="document.getElementById('pickFiles').click()">Choose files</button>
+    </div>
     <input id="pickFolder" type="file" webkitdirectory directory multiple hidden>
     <input id="pickFiles" type="file" multiple hidden accept=".zip,.nii,.gz,.dcm,application/dicom">
     <p id="picked" class="small"></p>
-  </div>
-  <div class="row" style="margin-top:16px">
-    <div class="field"><label for="label">Batch name (optional)</label><input id="label" type="text" placeholder="e.g. cohortA"></div>
+    <div id="upbox" hidden style="width:min(420px,100%)">
+      <div class="progress"><div id="bar"></div></div>
+      <p id="upmsg" class="small muted" style="margin-top:8px"></p>
+    </div>
+  </section>
+  <section class="card side">
+    <h2>Settings</h2>
+    <div class="field"><label for="label">Batch name (optional)</label><input id="label" type="text" placeholder="cohort A"></div>
     <div class="field"><label for="diam">Circle diameter (mm)</label><input id="diam" type="number" step="0.5" min="5" max="40" value="{{ defaults.roi_diameter_mm }}"></div>
     <button id="go" class="primary" disabled>Upload and measure</button>
-  </div>
-  <details>
-    <summary>Advanced settings</summary>
-    <div class="row" style="margin-top:12px">
-      <div class="field"><label for="edge">Gap from liver edge (mm)</label><input id="edge" type="number" step="0.5" min="0" max="20" value="{{ defaults.edge_margin_mm }}"></div>
+    <details>
+      <summary>More settings</summary>
+      <div class="field" style="margin-top:12px"><label for="edge">Gap from liver edge (mm)</label><input id="edge" type="number" step="0.5" min="0" max="20" value="{{ defaults.edge_margin_mm }}"></div>
       <div class="field"><label for="lig">Gap from falciform ligament (mm)</label><input id="lig" type="number" step="0.5" min="0" max="40" value="{{ defaults.ligament_margin_mm }}"></div>
       <div class="field"><label for="slice">Preferred slice thickness (mm)</label><input id="slice" type="number" step="0.5" min="0.5" max="10" value="{{ defaults.preferred_slice_mm }}"></div>
-    </div>
-    <p class="small"><label><input id="ident" type="checkbox"> Add DICOM PatientID, AccessionNumber and StudyDate to the results</label><br>
-      <span class="muted">Off by default. Turn on only if your study approval allows identifiers in the results file.</span></p>
-    <p class="small"><label><input id="keepedit" type="checkbox" checked> Keep the liver/spleen part of each scan so the circles can be <b>adjusted by hand</b> later</label><br>
-      <span class="muted">About 10–30 MB per scan, stored only on this computer and deleted when the upload is deleted.</span></p>
-    <p class="small"><label><input id="saveseg" type="checkbox"> Also keep the liver-segment mask (NIfTI) for each case</label></p>
-  </details>
-  <div id="upbox" hidden>
-    <div class="progress"><div id="bar"></div></div>
-    <p id="upmsg" class="small muted"></p>
-  </div>
-</section>
+      <label class="check"><input id="keepedit" type="checkbox" checked> Keep the liver and spleen part of each scan so circles can be adjusted by hand
+        <span>About 10–30 MB per scan, stored only on this computer, deleted with the upload.</span></label>
+      <label class="check"><input id="ident" type="checkbox"> Add DICOM PatientID, AccessionNumber and StudyDate to the results
+        <span>Only if your study approval allows identifiers in the results file.</span></label>
+      <label class="check"><input id="saveseg" type="checkbox"> Also keep the liver-segment mask (NIfTI)</label>
+    </details>
+  </section>
+</div>
 
-<section class="card">
-  <div class="row" style="justify-content:space-between;align-items:center">
-    <h2>Uploads</h2>
+<section class="card" style="margin-top:18px">
+  <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:6px">
+    <h2 style="margin:0">Worklist</h2>
     <span id="queue" class="small muted"></span>
   </div>
   <div class="table-wrap">
-    <table>
+    <table class="worklist">
       <thead><tr><th>#</th><th>Batch</th><th>By</th><th>Uploaded</th><th>Status</th><th>Progress</th><th></th></tr></thead>
       <tbody id="jobs"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody>
     </table>
