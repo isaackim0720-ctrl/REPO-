@@ -27,9 +27,21 @@ if [ "${1:-on}" = "off" ]; then
 fi
 
 if ! "$TS" status >/dev/null 2>&1; then
-  echo "Tailscale is installed but not connected. Click the Tailscale icon in the menu bar at the"
-  echo "top of the screen, log in (or choose Connect), then run this again."
-  exit 1
+  # Its menu-bar icon is easy to miss (on MacBooks it can hide behind the notch), so start the
+  # app and log in from here instead.
+  echo "Tailscale is not connected yet. Starting it..."
+  open -a Tailscale 2>/dev/null || true
+  sleep 5
+  if ! "$TS" status >/dev/null 2>&1; then
+    echo "If the Mac asks to allow a VPN configuration for Tailscale, click Allow."
+    echo "Log in: hold Command and double-click the link below, sign in, then come back here."
+    "$TS" up || true
+  fi
+  if ! "$TS" status >/dev/null 2>&1; then
+    echo "Tailscale is still not connected. Open the Tailscale app from Applications, log in,"
+    echo "then run this again."
+    exit 1
+  fi
 fi
 
 echo "Turning on encrypted access through Tailscale..."
