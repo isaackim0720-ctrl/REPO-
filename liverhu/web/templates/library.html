@@ -45,7 +45,7 @@
     <input id="filter" type="search" placeholder="Find a study, batch or series" aria-label="Find a study">
     <div class="lib-actions">
       <span id="selcount" class="small muted">None selected</span>
-      <label class="inline-field" for="diam">Circle <input id="diam" type="number" step="0.5" min="5" max="40" value="{{ defaults.roi_diameter_mm }}"> mm</label>
+      <label class="inline-field" for="diam" title="The spleen circle is as large as fits">Liver circles <input id="diam" type="number" step="0.5" min="5" max="60" value="{{ defaults.roi_diameter_mm }}"> mm</label>
       <button id="measure" class="primary" disabled>Measure selected</button>
       <button id="unqueue" disabled>Stop waiting</button>
       <button id="delete" class="danger" disabled>Delete</button>

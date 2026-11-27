@@ -22,7 +22,7 @@ def _cmd_process(a) -> int:
     from .config import Settings
     from .pipeline import process_case, write_tables
     from .scanio import discover_cases
-    s = Settings(roi_diameter_mm=a.diameter)
+    s = Settings() if a.diameter is None else Settings(roi_diameter_mm=a.diameter)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     results = []
@@ -174,7 +174,8 @@ def main(argv=None) -> int:
     pr = sub.add_parser("process", help="measure scans from folders/files without the website")
     pr.add_argument("inputs", nargs="+", help="DICOM folder(s), .zip, or .nii/.nii.gz")
     pr.add_argument("--out", required=True)
-    pr.add_argument("--diameter", type=float, default=15.0, help="ROI diameter in mm (default 15)")
+    pr.add_argument("--diameter", type=float, default=None,
+                    help="liver circle diameter in mm (default 30; smaller only if it does not fit)")
     pr.add_argument("--label", default="")
     pr.add_argument("--include-identifiers", action="store_true",
                     help="add DICOM PatientID/AccessionNumber/StudyDate to the results")

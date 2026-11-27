@@ -321,9 +321,10 @@ def _argmin2(score):
     return int(x), int(y), float(score[x, y])
 
 
-def _best_pair(s1, s2, gx, gy, min_sep):
-    """Best (RL1, RL2) centres on one slice: RL1 anterior (larger y) of RL2 and far enough
-    apart that the circles do not touch. Returns (p1, p2, total score) or None."""
+def _best_pair(s1, s2, gx, gy, min_sep, tol, weight):
+    """Best (RL1, RL2) centres on one slice: RL1 in front of (larger y than) RL2, the circles
+    at least min_sep apart (centre to centre), and RL2 roughly beneath RL1: a sideways
+    offset beyond `tol` mm costs `weight` per mm. Returns (p1, p2, total score) or None."""
     opts = []
     for first, second, first_is_rl1 in ((s1, s2, True), (s2, s1, False)):
         if not np.isfinite(first).any():
@@ -331,7 +332,8 @@ def _best_pair(s1, s2, gx, gy, min_sep):
         x, y, sc = _argmin2(first)
         far = (gx - gx[x, 0]) ** 2 + (gy - gy[0, y]) ** 2 >= min_sep ** 2
         side = (gy < gy[0, y]) if first_is_rl1 else (gy > gy[0, y])
-        cand = np.where(far & side, second, np.inf)
+        beneath = weight * np.maximum(np.abs(gx - gx[x, 0]) - tol, 0.0)
+        cand = np.where(far & side, second + beneath, np.inf)
         if not np.isfinite(cand).any():
             continue
         x2, y2, sc2 = _argmin2(cand)
@@ -343,23 +345,59 @@ def _best_pair(s1, s2, gx, gy, min_sep):
     return p1, p2, total
 
 
-def _one_slice(ct, seg, spacing, kernel, radius, glob, settings: Settings):
-    """Pick ONE axial slice for LL, RL1 and RL2 (the slice where all three circles fit in
-    the most uniform tissue) and the best spot for each circle on it.
-    RL1 = front of the right lobe (top of the image), RL2 = back (bottom of the image)."""
+def _position_costs(seg2d, radius, edge, sx, sy):
+    """mm away from the preferred spots on one slice (0 = as close as the edge gap allows):
+    near_edge - from the liver's outline; lateral - from the outer right side of the right
+    lobe; back - from the back (posterior, bottom of the image) of the right lobe."""
+    X, Y = seg2d.shape
+    reach = radius + edge
+    near_edge = np.maximum(ndimage.distance_transform_edt(seg2d > 0, sampling=(sx, sy)) - reach, 0.0)
+    rl = np.isin(seg2d, RIGHT_LOBE)
+    if rl.any():
+        xs, ys = np.nonzero(rl)
+        lateral = np.maximum((xs.max() - np.arange(X)) * sx - reach, 0.0)[:, None]   # x grows to the patient's right
+        back = np.maximum((np.arange(Y) - ys.min()) * sy - reach, 0.0)[None, :]      # y grows to the front
+    else:
+        lateral, back = np.zeros((X, 1)), np.zeros((1, Y))
+    return near_edge, lateral, back
+
+
+def liver_diameters(settings: Settings) -> list[float]:
+    """Circle sizes to try: the chosen diameter, then 5 mm smaller down to the minimum."""
+    d = float(settings.roi_diameter_mm)
+    lo = min(float(settings.min_roi_diameter_mm), d)
+    out = [d]
+    while out[-1] - 5.0 >= lo - 1e-9:
+        out.append(round(out[-1] - 5.0, 1))
+    return out
+
+
+def _one_slice(ct, seg, spacing, glob, settings: Settings):
+    """Pick ONE axial slice for LL, RL1 and RL2 and the spot for each circle on it.
+
+    Every circle stays inside its region with the edge/ligament gaps and avoids vessels and
+    lesions (outlier pixels). Among the allowed spots the score prefers uniform tissue near
+    the typical liver HU plus the protocol positions: all circles near the liver edge, RL1 at
+    the outer right edge (front sector), RL2 near the back (bottom of the image) roughly
+    beneath RL1, with liver between them. The largest circle size that fits is used."""
     sx, sy, _ = spacing
     g_mode, g_rsd, smooth3 = glob
     if not np.isfinite(g_mode):
         return None
     thr = max(settings.outlier_min_hu, 3.0 * (g_rsd if np.isfinite(g_rsd) else 10.0))
     E, L, m = settings.edge_margin_mm, settings.ligament_margin_mm, settings.max_outlier_fraction
+    w = float(settings.position_weight)
     rl1_lab = tuple(int(v) for v in settings.one_slice_rl1_segments)
     rl2_lab = tuple(int(v) for v in settings.one_slice_rl2_segments)
     win = tuple(settings.one_slice_window)
-    levels = [(E, L, m, True, win), (E / 2, L / 2, m, True, win),
-              (E / 2, L / 2, m, False, win), (1.0, 3.0, 0.15, False, (0.05, 0.95)),
+    levels = [(E, L, m, True), (E / 2, L / 2, m, True), (E / 2, L / 2, m, False),
+              (1.0, 3.0, 0.15, False),
               # last resort (e.g. a whole lobe with focal fat): no outlier limit, still one slice
-              (E / 2, L / 2, 1.0, True, win)]
+              (E / 2, L / 2, 1.0, True)]
+    diams = liver_diameters(settings)
+    # quality first, then size: strict rules at each size, then relaxed rules, then last resorts
+    plan = ([(d, (0, 1), win) for d in diams] + [(d, (2,), win) for d in diams]
+            + [(diams[-1], (3,), (0.05, 0.95)), (diams[-1], (4,), win)])
     zs = np.nonzero((seg > 0).any(axis=(0, 1)))[0]
     if len(zs) == 0:
         return None
@@ -367,41 +405,51 @@ def _one_slice(ct, seg, spacing, kernel, radius, glob, settings: Settings):
     X, Y = seg.shape[:2]
     gx = (np.arange(X) * sx)[:, None]
     gy = (np.arange(Y) * sy)[None, :]
-    min_sep = 2 * radius + 2.0
-    for lvl, (edge, lig, out_frac, sectors, w) in enumerate(levels):
-        z0 = max(0, int(math.floor(lo + w[0] * (hi - lo))))
-        z1 = min(seg.shape[2] - 1, int(math.ceil(lo + w[1] * (hi - lo))))
-        best = None
+    for diameter, lvls, win_ in plan:
+        radius = diameter / 2.0
+        kernel = disk_kernel(radius, sx, sy)
+        min_sep = 2 * radius + float(settings.min_circle_gap_mm)
+        z0 = max(0, int(math.floor(lo + win_[0] * (hi - lo))))
+        z1 = min(seg.shape[2] - 1, int(math.ceil(lo + win_[1] * (hi - lo))))
+        best = {lvl: None for lvl in lvls}
         for z in range(z0, z1 + 1):
             seg2d = seg[:, :, z]
-            v_ll = _valid_centres(seg2d, LEFT_OF_LIGAMENT, "left", kernel, radius, edge, lig, (sx, sy))
-            if v_ll is None:
-                continue
-            if sectors:
-                v1 = _valid_centres(seg2d, rl1_lab, "right", kernel, radius, edge, lig, (sx, sy))
-                v2 = _valid_centres(seg2d, rl2_lab, "right", kernel, radius, edge, lig, (sx, sy)) if v1 is not None else None
-            else:
-                v1 = v2 = _valid_centres(seg2d, RIGHT_LOBE, "right", kernel, radius, edge, lig, (sx, sy))
-            if v1 is None or v2 is None:
-                continue
-            mean, sd, frac = _slice_stats(ct, smooth3, z, kernel, g_mode, thr, True)
-            ok = frac <= out_frac
-            score = sd + settings.homogeneity_weight * np.abs(mean - g_mode)
-            s_ll = np.where(v_ll & ok, score, np.inf)
-            if not np.isfinite(s_ll).any():
-                continue
-            pair = _best_pair(np.where(v1 & ok, score, np.inf), np.where(v2 & ok, score, np.inf), gx, gy, min_sep)
-            if pair is None:
-                continue
-            xl, yl, sl = _argmin2(s_ll)
-            total = sl + pair[2]
-            if best is None or total < best["total"]:
-                best = {"total": total, "z": z, "LL": (xl, yl), "RL1": pair[0], "RL2": pair[1],
-                        "labels": {"LL": LEFT_OF_LIGAMENT, "RL1": rl1_lab if sectors else RIGHT_LOBE,
-                                   "RL2": rl2_lab if sectors else RIGHT_LOBE}}
-        if best is not None:
-            best["level"] = lvl
-            return best
+            stats = None
+            for lvl in lvls:
+                edge, lig, out_frac, sectors = levels[lvl]
+                v_ll = _valid_centres(seg2d, LEFT_OF_LIGAMENT, "left", kernel, radius, edge, lig, (sx, sy))
+                if v_ll is None:
+                    continue
+                if sectors:
+                    v1 = _valid_centres(seg2d, rl1_lab, "right", kernel, radius, edge, lig, (sx, sy))
+                    v2 = _valid_centres(seg2d, rl2_lab, "right", kernel, radius, edge, lig, (sx, sy)) if v1 is not None else None
+                else:
+                    v1 = v2 = _valid_centres(seg2d, RIGHT_LOBE, "right", kernel, radius, edge, lig, (sx, sy))
+                if v1 is None or v2 is None:
+                    continue
+                if stats is None:            # the same for every level on this slice
+                    mean, sd, frac = _slice_stats(ct, smooth3, z, kernel, g_mode, thr, True)
+                    stats = (sd + settings.homogeneity_weight * np.abs(mean - g_mode), frac)
+                score, frac = stats
+                ok = frac <= out_frac
+                near_edge, lateral, back = _position_costs(seg2d, radius, edge, sx, sy)
+                s_ll = np.where(v_ll & ok, score + w * near_edge, np.inf)
+                if not np.isfinite(s_ll).any():
+                    continue
+                s1 = np.where(v1 & ok, score + w * (near_edge + lateral), np.inf)
+                s2 = np.where(v2 & ok, score + w * (near_edge + back), np.inf)
+                pair = _best_pair(s1, s2, gx, gy, min_sep, float(settings.rl2_max_offset_mm), w)
+                if pair is None:
+                    continue
+                xl, yl, sl = _argmin2(s_ll)
+                total = sl + pair[2]
+                if best[lvl] is None or total < best[lvl]["total"]:
+                    best[lvl] = {"total": total, "z": z, "LL": (xl, yl), "RL1": pair[0], "RL2": pair[1],
+                                 "labels": {"LL": LEFT_OF_LIGAMENT, "RL1": rl1_lab if sectors else RIGHT_LOBE,
+                                            "RL2": rl2_lab if sectors else RIGHT_LOBE}}
+        for lvl in lvls:
+            if best[lvl] is not None:
+                return {**best[lvl], "level": lvl, "diameter": diameter}
     return None
 
 
@@ -474,26 +522,32 @@ def place_rois_with_stats(ct, seg, spacing, affine, settings: Settings):
              "liver_outlier_fraction": None if out_frac is None else round(out_frac, 3),
              "single_slice": False}
     if settings.single_slice:
-        picked = _one_slice(ct_c, seg_c, spacing, kernel, radius, glob, settings)
+        picked = _one_slice(ct_c, seg_c, spacing, glob, settings)
         if picked is not None:
             results = []
             z = picked["z"]
+            p_radius = picked["diameter"] / 2.0
+            p_kernel = disk_kernel(p_radius, sx, sy)
             for spec in _one_slice_specs(settings):
                 x, y = picked[spec.key]
                 reg = np.isin(seg_c[:, :, z], picked["labels"][spec.key])
                 found = {"x": x, "y": y, "z": z, "ref": float(np.median(ct_c[:, :, z][reg]))}
-                res = _measure(ct_c, seg_c, spacing, aff_c, kernel, radius, spec, found, picked["level"], settings)
+                res = _measure(ct_c, seg_c, spacing, aff_c, p_kernel, p_radius, spec, found, picked["level"], settings)
                 res.center_voxel = tuple(int(v + o) for v, o in zip(res.center_voxel, offset))
                 res.slice_index = res.center_voxel[2]
                 results.append(res)
-            stats.update(single_slice=True, slice_index=int(z + offset[2]))
+            stats.update(single_slice=True, slice_index=int(z + offset[2]), liver_circle_diameter_mm=picked["diameter"])
+            if picked["diameter"] < settings.roi_diameter_mm - 1e-6:
+                stats["diameter_note"] = (f"liver circles are {picked['diameter']:g} mm: "
+                                          f"{settings.roi_diameter_mm:g} mm circles did not fit")
             return results, stats
         stats["single_slice_note"] = "could not fit all 3 liver circles on one slice"
 
     results: list[RoiResult] = []
     rl1_z = None
+    kernels = {d: disk_kernel(d / 2.0, sx, sy) for d in liver_diameters(settings)}
     for spec in _specs_for(settings):
-        found, used_level = None, 0
+        found, used_level, used_d = None, 0, None
         for lvl, (lab_attr, edge_m, lig_m, widen, out_frac, use_global, use_out) in enumerate(levels):
             labels = getattr(spec, lab_attr)
             f0, f1 = getattr(settings, spec.window_attr)
@@ -503,16 +557,19 @@ def place_rois_with_stats(ct, seg, spacing, affine, settings: Settings):
                 continue
             if spec.key == "RL2" and rl1_z is not None:   # keep RL2 clearly below RL1
                 zr = (zr[0], min(zr[1], rl1_z - int(math.ceil(settings.min_rl_separation_mm / sz))))
-            found = _search(ct_c, seg_c, spacing, kernel, radius, labels, spec.side, zr,
-                            edge_m, lig_m, out_frac, settings, glob, use_global, use_out)
+            for d, k in kernels.items():                  # the largest circle that fits
+                found = _search(ct_c, seg_c, spacing, k, d / 2.0, labels, spec.side, zr,
+                                edge_m, lig_m, out_frac, settings, glob, use_global, use_out)
+                if found:
+                    used_level, used_d = lvl, d
+                    break
             if found:
-                used_level = lvl
                 break
         if not found:
             results.append(RoiResult(spec.key, spec.name, False,
                                      "no valid position found (segment missing or too small)"))
             continue
-        res = _measure(ct_c, seg_c, spacing, aff_c, kernel, radius, spec, found, used_level, settings)
+        res = _measure(ct_c, seg_c, spacing, aff_c, kernels[used_d], used_d / 2.0, spec, found, used_level, settings)
         # report voxel indices in the full (uncropped) canonical array
         res.center_voxel = tuple(int(v + o) for v, o in zip(res.center_voxel, offset))
         res.slice_index = res.center_voxel[2]
@@ -522,9 +579,52 @@ def place_rois_with_stats(ct, seg, spacing, affine, settings: Settings):
     return results, stats
 
 
+def _largest_circle(ct_c, seg_c, spacing, glob, settings: Settings):
+    """The largest circle that fits in the mask with the edge gap and (almost) no outlier
+    pixels (vessels at the hilum, cysts, lesions), anywhere in the organ. Among spots that
+    fit a circle of that size, the most uniform one. Returns (found, radius) or None."""
+    sx, sy, _ = spacing
+    g_mode, g_rsd, smooth3 = glob
+    if not np.isfinite(g_mode):
+        return None
+    thr = max(settings.outlier_min_hu, 3.0 * (g_rsd if np.isfinite(g_rsd) else 10.0))
+    E, m = settings.edge_margin_mm, settings.max_outlier_fraction
+    zr = _z_window(seg_c, (1,), (0.05, 0.95))
+    if zr is None:
+        return None
+    gap = 2.0                         # mm kept free between the circle and a vessel/lesion
+    best = None
+    for z in range(zr[0], zr[1] + 1):
+        msk = seg_c[:, :, z] > 0
+        if msk.sum() < 20:
+            continue
+        # largest radius allowed at each centre: edge gap from the outline, `gap` from outliers
+        allowed = ndimage.distance_transform_edt(msk, sampling=(sx, sy)) - E
+        out = msk & (np.abs(smooth3[:, :, z] - g_mode) > thr)
+        if out.any():                 # ignore specks of noise (fewer than 4 pixels)
+            lab, n = ndimage.label(out)
+            sizes = ndimage.sum(out, lab, index=np.arange(1, n + 1))
+            out = np.isin(lab, 1 + np.nonzero(sizes >= 4)[0])
+        if out.any():
+            allowed = np.minimum(allowed, ndimage.distance_transform_edt(~out, sampling=(sx, sy)) - gap)
+        x, y = np.unravel_index(int(np.argmax(allowed)), allowed.shape)
+        if best is None or allowed[x, y] > best["r"]:
+            best = {"r": float(allowed[x, y]), "x": int(x), "y": int(y), "z": int(z), "ref": float(g_mode)}
+    if best is None:
+        return None
+    r = best["r"]
+    if settings.spleen_max_diameter_mm and settings.spleen_max_diameter_mm > 0:
+        r = min(r, settings.spleen_max_diameter_mm / 2.0)
+    r = math.floor(r * 2.0) / 2.0                     # whole-mm diameters
+    if r < min(settings.min_roi_diameter_mm, settings.roi_diameter_mm) / 2.0:
+        return None
+    return best, r
+
+
 def place_spleen_roi(ct, spleen_mask, spacing, affine, settings: Settings, prefer_z: int | None = None) -> tuple[RoiResult, dict]:
-    """One circle in the spleen: fully inside it, away from its edge, on the most uniform
-    tissue near the spleen's typical HU (avoids vessels at the hilum, cysts, artefacts)."""
+    """One circle in the spleen: fully inside it, away from its edge, avoiding vessels at the
+    hilum, cysts and artefacts. By default the largest circle that fits anywhere in the spleen;
+    otherwise a circle of the liver-circle size on the most uniform tissue."""
     spec = SPLEEN_SPEC
     if spleen_mask is None or not np.any(spleen_mask):
         return RoiResult(spec.key, spec.name, False, "spleen not found in scan"), {}
@@ -543,13 +643,23 @@ def place_spleen_roi(ct, spleen_mask, spacing, affine, settings: Settings, prefe
     glob = (g_mode, g_rsd, smooth3)
     E, m = settings.edge_margin_mm, settings.max_outlier_fraction
 
-    def _done(found, lvl, same):
-        res = _measure(ct_c, seg_c, spacing, aff_c, kernel, radius, spec, found, lvl, settings)
+    def _done(found, lvl, same, k=kernel, rad=radius, largest=False):
+        res = _measure(ct_c, seg_c, spacing, aff_c, k, rad, spec, found, lvl, settings)
         res.center_voxel = tuple(int(v + o) for v, o in zip(res.center_voxel, offset))
         res.slice_index = res.center_voxel[2]
         return res, {"spleen_typical_hu": None if not np.isfinite(g_mode) else round(g_mode, 1),
                      "spleen_outlier_threshold_hu": round(max(settings.outlier_min_hu, 3.0 * (g_rsd if np.isfinite(g_rsd) else 10.0)), 1),
-                     "same_slice": same}
+                     "same_slice": same, "spleen_largest_circle": largest}
+
+    if settings.spleen_largest_circle:
+        big = _largest_circle(ct_c, seg_c, spacing, glob, settings)
+        if big is not None:
+            found, r = big
+            same = prefer_z is not None and int(found["z"] + offset[2]) == int(prefer_z)
+            return _done(found, 0, same, disk_kernel(r, sx, sy), r, largest=True)
+        # not even the smallest circle fits without vessels/lesions: relaxed rules, smallest size
+        radius = min(settings.min_roi_diameter_mm, settings.roi_diameter_mm) / 2.0
+        kernel = disk_kernel(radius, sx, sy)
 
     if prefer_z is not None:          # same slice as the liver circles, if the spleen fits there
         zc = int(prefer_z) - int(offset[2])
@@ -558,7 +668,7 @@ def place_spleen_roi(ct, spleen_mask, spacing, affine, settings: Settings, prefe
                 found = _search(ct_c, seg_c, spacing, kernel, radius, spec.labels, spec.side, (zc, zc),
                                 edge_m, 0.0, m, settings, glob, True, True)
                 if found:
-                    return _done(found, lvl, True)
+                    return _done(found, lvl, True, kernel, radius)
     levels = [(E, 0.0, m, True, True), (E / 2, 0.0, m, True, True), (E / 2, 1.0, 0.15, True, True),
               (E / 2, 0.0, 1.0, False, False)]
     for lvl, (edge_m, widen, out_frac, use_global, use_out) in enumerate(levels):
@@ -570,5 +680,5 @@ def place_spleen_roi(ct, spleen_mask, spacing, affine, settings: Settings, prefe
         found = _search(ct_c, seg_c, spacing, kernel, radius, spec.labels, spec.side, zr,
                         edge_m, 0.0, out_frac, settings, glob, use_global, use_out)
         if found:
-            return _done(found, lvl, False)
+            return _done(found, lvl, False, kernel, radius)
     return RoiResult(spec.key, spec.name, False, "spleen too small for the circle"), {}

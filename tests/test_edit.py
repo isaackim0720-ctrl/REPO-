@@ -49,7 +49,7 @@ def test_manual_save_reset_and_spreadsheet(tmp_path):
     new = edit.apply_manual(result, moved, "maria")
     r = next(r for r in new["rois"] if r["key"] == "LL")
     assert r["manual"] and r["edited_by"] == "maria" and r["diameter_mm"] == 20.0
-    assert r["auto"]["mean_hu"] == pytest.approx(ll.mean_hu) and r["auto"]["diameter_mm"] == 15.0
+    assert r["auto"]["mean_hu"] == pytest.approx(ll.mean_hu) and r["auto"]["diameter_mm"] == ll.diameter_mm
     assert any("LL moved by hand by maria" in f for f in new["flags"])
     assert not any(f.startswith("LL SD 30") for f in new["flags"])          # reviewed -> old LL flag cleared
     assert "Contrast agent recorded in DICOM" in new["flags"]
@@ -104,7 +104,7 @@ def test_editor_web_api(tmp_path):
         info = c.get(f"/api/cases/{cid}/edit-info", auth=a).json()
         assert info["available"] and [r["key"] for r in info["rois"]] == ["LL", "RL1", "RL2", "SPL"]
         ll = info["rois"][0]
-        m = c.get(f"/api/cases/{cid}/measure", params={"key": "LL", "x": ll["x"], "y": ll["y"], "z": ll["z"], "d": 15}, auth=a).json()
+        m = c.get(f"/api/cases/{cid}/measure", params={"key": "LL", "x": ll["x"], "y": ll["y"], "z": ll["z"], "d": rois[0].diameter_mm}, auth=a).json()
         assert m["mean_hu"] == pytest.approx(rois[0].mean_hu)
         assert c.get(f"/cases/{cid}/slice/{ll['z']}.png", auth=a).headers["content-type"] == "image/png"
         assert c.get(f"/cases/{cid}/edit", auth=a).status_code == 200

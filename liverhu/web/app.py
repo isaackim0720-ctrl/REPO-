@@ -53,7 +53,7 @@ def _num(form, key: str, default: float, lo: float, hi: float) -> float:
 def _measure_settings(form) -> dict:
     """Settings that apply when a study is measured (from the upload form or the library)."""
     d = Settings()
-    return {"roi_diameter_mm": _num(form, "roi_diameter_mm", d.roi_diameter_mm, 5.0, 40.0),
+    return {"roi_diameter_mm": _num(form, "roi_diameter_mm", d.roi_diameter_mm, 5.0, 60.0),
             "edge_margin_mm": _num(form, "edge_margin_mm", d.edge_margin_mm, 0.0, 20.0),
             "ligament_margin_mm": _num(form, "ligament_margin_mm", d.ligament_margin_mm, 0.0, 40.0),
             "save_segmentation": _on(form.get("save_segmentation")),

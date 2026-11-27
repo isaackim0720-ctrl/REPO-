@@ -89,7 +89,7 @@ def measure_at(ed: EditData, key: str, x: int, y: int, z: int, diameter_mm: floa
     """Measure a circle at crop voxel (x, y, z); same method as the automatic placement."""
     spec = SPECS[key]
     sx, sy, _ = ed.spacing
-    diameter_mm = float(min(max(diameter_mm, 3.0), 60.0))
+    diameter_mm = float(min(max(diameter_mm, 3.0), 120.0))
     radius = diameter_mm / 2.0
     kernel = disk_kernel(radius, sx, sy)
     kx, ky = kernel.shape[0] // 2, kernel.shape[1] // 2

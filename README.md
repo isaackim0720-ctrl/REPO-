@@ -42,8 +42,14 @@ of the 3 liver circles. Results download as Excel/CSV, one row per scan.
    artefacts. If nothing fits, the rules are relaxed step by step and the case is flagged.
 5. **Measurement** is done on the original scan pixels (no smoothing, no resampling).
 
-Defaults (change on the website under *Advanced*, or in `liverhu/config.py`): circle diameter
-15 mm (1.77 cm²), edge gap 5 mm, ligament gap 10 mm. Use the same settings for every scan in
+Circle positions (one-slice mode): all liver circles near the liver edge; RL1 at the outer
+right edge of the right lobe (front sector, segments 5/8); RL2 near the back (bottom of the
+image, segments 6/7), roughly beneath RL1, with at least 10 mm of liver between them. The
+spleen circle is the largest circle that fits anywhere in the spleen.
+
+Defaults (change on the website under *More settings*, or in `liverhu/config.py`): liver circle
+diameter 30 mm (7.07 cm²; 25, 20, then 15 mm only if it does not fit, noted in the result),
+edge gap 5 mm, ligament gap 10 mm. Use the same settings for every scan in
 a study; they are saved in every result row.
 
 ## Automatic checks

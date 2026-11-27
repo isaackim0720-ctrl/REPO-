@@ -8,12 +8,12 @@
     <li><b>Find the scan.</b> In each uploaded study the axial CT series is chosen automatically, preferring a non-contrast series and a slice thickness near {{ defaults.preferred_slice_mm }} mm. Which series was used is shown with every result.</li>
     <li><b>Outline the liver.</b> The AI model <i>TotalSegmentator</i>, trained on real CT scans, outlines the liver and its 8 Couinaud segments. A coarse 6 mm model first finds the liver, then the liver-segment model runs on that region only, so an 8 GB lab PC can run it.</li>
     <li><b>Find the falciform ligament.</b> The ligament runs in the fissure between segments 2/3 (left lateral section) and segment 4. On every slice that boundary is marked (yellow dots in the QA image).</li>
-    <li><b>Pick one slice and place the circles</b> ({{ defaults.roi_diameter_mm }} mm diameter by default). All three liver circles go on the <b>same axial slice</b>: the slice in the middle part of the liver where all three fit in the most uniform tissue.
+    <li><b>Pick one slice and place the circles</b> ({{ defaults.roi_diameter_mm }} mm diameter by default; 5 mm smaller, down to {{ defaults.min_roi_diameter_mm }} mm, only if that size does not fit). All three liver circles go on the <b>same axial slice</b>, in the middle part of the liver, close to the liver's edge (but at least {{ defaults.edge_margin_mm }} mm inside it) and never overlapping.
       <ul>
         <li><span class="roi-ll">LL</span>: left lobe, inside segments 2/3, so <b>left of the falciform ligament</b>, at least {{ defaults.ligament_margin_mm }} mm from it.</li>
-        <li><span class="roi-rl1">RL1</span>: right lobe, <b>front</b> (top of the image, segments 5/8).</li>
-        <li><span class="roi-rl2">RL2</span>: right lobe, <b>back</b> (bottom of the image, segments 6/7), below RL1 and not overlapping it.</li>
-        <li><span class="roi-spl">SPL</span>: the <b>spleen</b>, on the same slice if the spleen fits there; otherwise on the spleen's best slice.</li>
+        <li><span class="roi-rl1">RL1</span>: right lobe, front sector (segments 5/8), at the <b>outer right edge</b> of the liver (the left side of the image).</li>
+        <li><span class="roi-rl2">RL2</span>: right lobe, back sector (segments 6/7), <b>near the bottom edge</b> of the image, roughly beneath RL1 (it may sit a little toward the middle, following the liver's shape), with at least {{ defaults.min_circle_gap_mm }} mm of liver between RL1 and RL2.</li>
+        <li><span class="roi-spl">SPL</span>: the <b>spleen</b>, the <b>largest circle that fits</b> in it (anywhere in the spleen, at least {{ defaults.edge_margin_mm }} mm from its edge, avoiding vessels at the hilum, cysts and lesions).</li>
       </ul>
       Each circle stays at least {{ defaults.edge_margin_mm }} mm inside the liver and its segments and avoids vessels, lesions and artefacts. If the three cannot fit on one slice, they are placed on separate slices and the case is flagged.</li>
     <li><b>Liver vs spleen</b>: the results also give <i>liver − spleen</i> (the "liver attenuation index") and <i>liver / spleen</i>, both using the mean of the 3 liver circles.</li>

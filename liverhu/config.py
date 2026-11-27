@@ -7,8 +7,20 @@ from dataclasses import dataclass, asdict, fields
 
 @dataclass
 class Settings:
-    # Circle size. 15 mm diameter = 1.77 cm2.
-    roi_diameter_mm: float = 15.0
+    # Liver circle size. 30 mm diameter = 7.07 cm2. If three circles of this size do not fit
+    # on one slice, 5 mm smaller ones are tried, down to min_roi_diameter_mm (noted in the result).
+    roi_diameter_mm: float = 30.0
+    min_roi_diameter_mm: float = 15.0
+    # Where on the slice the liver circles go (one-slice mode): near the liver edge;
+    # RL1 at the outer right edge of the right lobe; RL2 near the back (bottom of the image),
+    # roughly beneath RL1. Each mm away from the preferred spot costs this much in the
+    # placement score (the score is in HU: local SD + 0.5 x |mean - typical liver HU|).
+    position_weight: float = 0.5
+    rl2_max_offset_mm: float = 30.0       # RL2 may sit this far sideways from RL1 without penalty
+    min_circle_gap_mm: float = 10.0       # at least this much liver between RL1 and RL2
+    # Spleen: the largest circle that fits in the spleen (with the edge gap), anywhere in it.
+    spleen_largest_circle: bool = True
+    spleen_max_diameter_mm: float = 0.0   # 0 = no upper limit
     # Minimum gap between the circle edge and the liver/segment boundary (partial-volume guard).
     edge_margin_mm: float = 5.0
     # Minimum gap between the circle edge and the estimated falciform ligament.
@@ -29,9 +41,9 @@ class Settings:
     rl1_segments: tuple = (8,)
     rl2_segments: tuple = (5, 6)
     # One-slice mode (default): LL, RL1 and RL2 on the SAME axial slice - the slice where all
-    # three fit in the most uniform tissue. RL1 = front of the right lobe (top of the image,
-    # segments 5/8), RL2 = back (bottom of the image, segments 6/7). The spleen circle uses
-    # that slice too when the spleen fits there, otherwise its own best slice.
+    # three fit best. RL1 = front sector of the right lobe at its outer edge (segments 5/8),
+    # RL2 = back sector near the bottom of the image (segments 6/7). The spleen circle goes
+    # where the largest circle fits (spleen_largest_circle), or else on that slice if it can.
     single_slice: bool = True
     one_slice_window: tuple = (0.20, 0.80)   # slices considered: middle part of the liver
     one_slice_rl1_segments: tuple = (5, 8)

@@ -59,7 +59,7 @@ def test_one_slice_all_liver_circles_same_slice_front_and_back():
     assert min(abs(rl1.mean_hu - v) for v in (HU_TOP, HU_BOTTOM)) < 4
 
 
-def test_spleen_on_liver_slice_when_possible():
+def test_spleen_circle_is_the_largest_that_fits():
     from liverhu.roi import place_spleen_roi
     shape, spacing = (200, 160, 60), (0.8, 0.8, 2.5)
     X, Y, Z = np.meshgrid(*(np.arange(n) for n in shape), indexing="ij")
@@ -67,8 +67,15 @@ def test_spleen_on_liver_slice_when_possible():
     ct = np.where(spleen, 45.0, -100.0).astype(np.float32) + np.random.default_rng(2).normal(0, 5, shape).astype(np.float32) * spleen
     aff = np.diag([*spacing, 1.0])
     r, st = place_spleen_roi(ct, spleen, spacing, aff, Settings(), prefer_z=35)
-    assert st["same_slice"] and r.center_voxel[2] == 35
-    r2, st2 = place_spleen_roi(ct, spleen, spacing, aff, Settings(), prefer_z=59)   # spleen not on that slice
+    # widest part of the spleen: half-width 30 px x 0.8 mm = 24 mm, minus the 5 mm edge gap
+    assert st["spleen_largest_circle"] and abs(r.center_voxel[2] - 30) <= 1
+    assert 36.0 <= r.diameter_mm <= 38.0 and r.diameter_mm > Settings().roi_diameter_mm
+    assert r.edge_distance_mm >= Settings().edge_margin_mm - 1.0
+    # the old rule is still available: fixed size, on the liver slice when the spleen is there
+    fixed = Settings(spleen_largest_circle=False, roi_diameter_mm=15.0)
+    r1, st1 = place_spleen_roi(ct, spleen, spacing, aff, fixed, prefer_z=35)
+    assert st1["same_slice"] and r1.center_voxel[2] == 35 and r1.diameter_mm == 15.0
+    r2, st2 = place_spleen_roi(ct, spleen, spacing, aff, fixed, prefer_z=59)   # spleen not on that slice
     assert r2.placed and not st2["same_slice"] and r2.center_voxel[2] != 59
 
 
@@ -220,3 +227,40 @@ def test_right_lobe_segments_are_configurable():
     assert set(roi(res, "RL2").segments_in_roi) <= {5}
     s2 = Settings.from_dict(Settings(rl1_segments=(8,)).to_dict())
     assert tuple(int(v) for v in s2.rl1_segments) == (8,)
+
+
+def test_one_slice_positions_follow_the_protocol():
+    """30 mm circles near the liver edge; RL1 at the outer right edge, RL2 at the back roughly
+    beneath it, with liver between them; the spleen circle is as large as fits."""
+    ct, seg, aff, _ = make_phantom(seed=5)
+    sp = (0.8, 0.8, 2.5)
+    s = Settings()
+    res, st = place_rois_with_stats(ct, seg, sp, aff, s)
+    ll, r1, r2 = roi(res, "LL"), roi(res, "RL1"), roi(res, "RL2")
+    assert st["single_slice"] and st["liver_circle_diameter_mm"] == 30.0
+    # (the phantom liver is small: 30 mm circles fit with the half edge gap, level 1)
+    assert all(r.diameter_mm == 30.0 and r.fallback_level <= 1 for r in (ll, r1, r2))
+    for r in (ll, r1, r2):                       # near the edge, but never closer than the gap
+        gap = s.edge_margin_mm / (2 if r.fallback_level else 1)
+        assert gap - 0.5 <= r.edge_distance_mm <= gap + 3.0
+    z = r1.center_voxel[2]
+    rl = np.isin(seg[:, :, z], (5, 6, 7, 8))
+    xs, ys = np.nonzero(rl)
+    reach = (15.0 + s.edge_margin_mm) / sp[0]     # centre can be no closer to the side than this
+    assert r1.center_voxel[0] >= xs.max() - reach - 4          # at the outer right side
+    assert r2.center_voxel[1] <= ys.min() + reach + 4          # at the back
+    assert r2.center_voxel[1] < r1.center_voxel[1]             # RL2 behind RL1
+    dx = abs(r1.center_voxel[0] - r2.center_voxel[0]) * sp[0]
+    dist = math.hypot(dx, (r1.center_voxel[1] - r2.center_voxel[1]) * sp[1])
+    assert dist >= 30.0 + s.min_circle_gap_mm                  # no overlap, liver in between
+    assert dx <= s.rl2_max_offset_mm + 10.0                    # roughly beneath
+
+
+def test_liver_circles_shrink_only_when_needed():
+    from liverhu.roi import liver_diameters
+    assert liver_diameters(Settings()) == [30.0, 25.0, 20.0, 15.0]
+    assert liver_diameters(Settings(roi_diameter_mm=15.0)) == [15.0]
+    ct, seg, aff, _ = make_phantom(seed=5)
+    res, st = place_rois_with_stats(ct, seg, (0.8, 0.8, 2.5), aff, Settings(roi_diameter_mm=200.0))
+    assert st["liver_circle_diameter_mm"] < 200.0 and "did not fit" in st["diameter_note"]
+    assert all(r.placed and r.diameter_mm == st["liver_circle_diameter_mm"] for r in res)

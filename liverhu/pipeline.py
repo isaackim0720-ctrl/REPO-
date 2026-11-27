@@ -44,6 +44,8 @@ def _flags(rois, meta, liver_touch, liver_ml, liver_stats=None, spleen=None, spl
             sthr = (spleen_stats or {}).get("spleen_outlier_threshold_hu") or 20.0
             if st is not None and abs(spleen.mean_hu - st) > sthr:
                 flags.append(f"SPL mean {spleen.mean_hu:.0f} HU differs from the typical spleen value {st:.0f} HU - check image")
+    if (liver_stats or {}).get("diameter_note"):
+        flags.append(liver_stats["diameter_note"])
     for r in rois:
         if not r.placed:
             flags.append(f"{r.key} not placed: {r.reason}")
