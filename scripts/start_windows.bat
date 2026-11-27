@@ -7,7 +7,5 @@ if not exist .venv\Scripts\python.exe (
   pause
   exit /b 1
 )
-echo This computer's network address(es) - others open http://ADDRESS:8000
-ipconfig | findstr /R /C:"IPv4"
 ".venv\Scripts\python.exe" -m liverhu serve --data "%~dp0\..\liverhu_data" %*
 pause

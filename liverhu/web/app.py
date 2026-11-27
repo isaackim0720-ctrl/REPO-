@@ -1,10 +1,16 @@
 """Private lab website: upload CT scans, see the 3 ROIs and HU values, download spreadsheets."""
 from __future__ import annotations
 
+import hashlib
+import hmac
 import io
 import json
+import math
 import re
+import secrets
 import shutil
+import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -15,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import numpy as np
 from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import MutableHeaders
 
 from .. import __version__
 from ..config import Settings
@@ -31,6 +38,100 @@ def _safe_rel(name: str) -> Path:
     parts = [p for p in re.split(r"[\\/]+", name or "") if p not in ("", ".", "..")]
     parts = [safe_name(p.replace(":", "_"), "f") for p in parts]
     return Path(*parts) if parts else Path("file")
+
+
+LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+
+
+class LoginGuard:
+    """Stops password guessing: after `max_wrong` DIFFERENT wrong passwords from one sender within
+    `window` seconds, that sender is refused for `lock` seconds. Repeating the same wrong password
+    (e.g. a browser tab still holding an old password) does not count again."""
+
+    def __init__(self, max_wrong: int = 10, window: float = 15 * 60, lock: float = 15 * 60):
+        self.max_wrong, self.window, self.lock = max_wrong, window, lock
+        self._key = secrets.token_bytes(16)          # wrong passwords are kept only as keyed hashes
+        self._wrong: dict[str, dict[bytes, float]] = {}
+        self._locked: dict[str, float] = {}
+        self._mx = threading.Lock()
+
+    @staticmethod
+    def sender(request: Request) -> str:
+        host = request.client.host if request.client else "?"
+        if host in LOOPBACK:
+            # Behind Tailscale Serve every request arrives from this computer; tell people apart by
+            # the identity Tailscale adds (it strips any copy sent by the browser) or the forwarded address.
+            fwd = (request.headers.get("tailscale-user-login")
+                   or request.headers.get("x-forwarded-for", "").split(",")[0].strip())
+            if fwd:
+                return "via " + fwd[:200]
+        return host
+
+    def wait_seconds(self, who: str) -> float:
+        with self._mx:
+            until = self._locked.get(who, 0.0)
+            left = until - time.monotonic()
+            if left <= 0 and who in self._locked:
+                del self._locked[who]
+            return max(0.0, left)
+
+    def wrong(self, who: str, password: str) -> None:
+        now = time.monotonic()
+        tag = hmac.new(self._key, password.encode("utf-8", "replace"), hashlib.sha256).digest()
+        with self._mx:
+            if len(self._wrong) > 5000:              # bound memory
+                self._wrong.clear()
+            seen = {t: ts for t, ts in self._wrong.get(who, {}).items() if now - ts < self.window}
+            seen[tag] = now
+            self._wrong[who] = seen
+            if len(seen) >= self.max_wrong:
+                self._locked[who] = now + self.lock
+                self._wrong.pop(who, None)
+
+    def right(self, who: str) -> None:
+        with self._mx:
+            self._wrong.pop(who, None)
+
+
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+SECURITY_HEADERS = {
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "referrer-policy": "no-referrer",
+    "content-security-policy": "frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'",
+    "permissions-policy": "camera=(), microphone=(), geolocation=()",
+}
+
+
+class SecurityMiddleware:
+    """Refuses changes sent from other websites (cross-site request forgery), adds browser security
+    headers, and tells browsers not to keep copies of pages and results (patient data) in their cache."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        if scope["method"] not in SAFE_METHODS:
+            site = next((v.decode("latin-1").lower() for k, v in scope.get("headers", [])
+                         if k.lower() == b"sec-fetch-site"), "")
+            if site in ("cross-site", "same-site"):
+                resp = JSONResponse({"detail": "Refused: this request came from another website."}, status_code=403)
+                return await resp(scope, receive, send)
+        static = scope.get("path", "").startswith("/static/")
+
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                h = MutableHeaders(scope=message)
+                for k, v in SECURITY_HEADERS.items():
+                    if k not in h:
+                        h[k] = v
+                if not static:
+                    h["cache-control"] = "no-store"
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
 
 
 def _summary(row: dict) -> dict:
@@ -71,13 +172,23 @@ def create_app(data: Path, keep_uploads: bool = False, start_worker: bool = True
 
     app = FastAPI(title="HUnter", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.store, app.state.worker = store, worker
+    app.add_middleware(SecurityMiddleware)
     templates = Jinja2Templates(directory=str(HERE / "templates"))
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
     security = HTTPBasic(realm="HUnter lab website")
+    guard = app.state.login_guard = LoginGuard()
 
-    def user(creds: HTTPBasicCredentials = Depends(security)) -> str:
+    def user(request: Request, creds: HTTPBasicCredentials = Depends(security)) -> str:
+        who = guard.sender(request)
+        wait = guard.wait_seconds(who)
+        if wait:
+            mins = max(1, math.ceil(wait / 60))
+            raise HTTPException(429, f"Too many wrong passwords. Try again in {mins} minute{'s' if mins > 1 else ''}.",
+                                headers={"Retry-After": str(int(wait) + 1)})
         if not auth.check_password(data, creds.password):
+            guard.wrong(who, creds.password)
             raise HTTPException(401, "Wrong password", headers={"WWW-Authenticate": 'Basic realm="HUnter"'})
+        guard.right(who)
         return (creds.username or "lab").strip()[:60] or "lab"
 
     def page(request: Request, name: str, **ctx):

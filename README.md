@@ -93,12 +93,14 @@ unzip (step 2; a Mac unzips automatically), then in Finder right-click the folde
 
 ## Use it
 
-* On the server computer open <http://localhost:8000>. Other lab members open
-  `http://<server-address>:8000`; the start window prints the address (e.g. `http://192.168.1.23:8000`).
-* If a device's browser insists on a secure connection ("can't provide a secure connection"),
-  use the **https** address the start window prints, e.g. `https://192.168.1.23:8443`. The first
-  time, the browser warns that the connection is not private (the certificate is self-made):
-  choose **Advanced → Proceed** (Chrome/Edge) or **Show Details → visit this website** (Safari).
+* On the server computer open <http://localhost:8000>.
+* Other devices on the same network open the **https** address the start window prints, e.g.
+  `https://192.168.1.23:8443`. Everything is encrypted, including the password. The first time,
+  the browser warns that the connection is not private (the certificate is self-made): choose
+  **Advanced → Proceed** (Chrome/Edge) or **Show Details → visit this website** (Safari).
+  Plain `http://<address>:8000` only works on the server computer itself (start with `--lan-http`
+  to allow it from other computers too; not recommended, because it is not encrypted).
+* From anywhere else, see *Open HUnter from anywhere* below.
 * Log in: **user name = your name** (it is recorded with your uploads), **password = the lab password**.
 * Drag in a folder exported from your scan database (DICOM, any folder layout, many patients
   at once), `.zip` files, or `.nii/.nii.gz`. Each study is measured separately, one at a time,
@@ -113,18 +115,61 @@ Liver mean, liver − spleen and liver/spleen update, the check image is redrawn
 shows `LL_manual` etc. This works for scans measured with v0.3 or later, because the liver/spleen
 region of each scan is kept for it (about 10–30 MB per scan; untick under *Advanced* to not keep it).
 
-The website is only reachable inside your lab network and only with the password.
-Scans never leave the server computer. The uploaded files are **deleted right after they are measured**;
+The website is only reachable inside your lab network (or your private Tailscale network, below)
+and only with the password. Scans never leave the server computer. The uploaded files are **deleted right after they are measured**;
 only the numbers and QA images are kept (in `liverhu_data/`). Start with `--keep-uploads` to
 keep them. Patient names are never read; PatientID/AccessionNumber/StudyDate are added to
 results only if you tick that option. Each study also gets a pseudonymous `study_key`.
 
 Change the password: `python -m liverhu set-password` (with the server stopped).
 
+**Built-in protection:**
+* Encryption for everyone except the server computer itself.
+* Password guessing is blocked: after 10 different wrong passwords from one sender, that sender
+  waits 15 minutes.
+* Changes sent from other websites are refused (cross-site request forgery).
+* Browsers are told not to keep copies of pages or results.
+* The password is stored only as a salted hash.
+
+## Run it with no Terminal window (Mac)
+
+```bash
+bash scripts/background_mac.sh on
+```
+
+HUnter then runs in the background. It starts by itself whenever you log in, keeps the Mac
+from dozing off while it runs, and starts again if it ever stops; you can close Terminal.
+macOS does not allow background programs in Downloads, Desktop or Documents, so if HUnter is
+in one of those, the script offers to move it to your home folder (`~/HUnter`, with results
+and password). The Mac must stay on and awake: plugged in, lid open.
+`bash scripts/background_mac.sh status` shows the addresses, `... log` the latest messages, and
+`... off` stops it. The update script restarts it automatically.
+
+## Open HUnter from anywhere (Tailscale)
+
+[Tailscale](https://tailscale.com) is a free app (Personal plan: up to 6 people, non-commercial
+use) that joins your devices, and the people you invite, in a private encrypted network.
+HUnter is then reachable from home, school or phone data at an address like
+`https://your-mac.tail1234.ts.net`, with a real certificate (no browser warning). It is not on
+the public internet: only devices signed in to your Tailscale network can open it, and search
+engines cannot find it. The HUnter password is still required. Check with your lab that this
+is allowed for the scans you use.
+
+1. On the HUnter Mac, install Tailscale (Mac App Store or <https://tailscale.com/download>),
+   open it from the menu bar and log in.
+2. In Terminal, in the HUnter folder, run `bash scripts/remote_access_mac.sh`. The first time,
+   it may show a link: open it and click **Enable**. It prints the `https://….ts.net` address.
+   This stays on after restarts; `bash scripts/remote_access_mac.sh off` turns it off.
+3. Invite lab members: <https://login.tailscale.com/admin/users> → **Invite users**. They install
+   Tailscale on their own computer or phone, accept, and open the address.
+
+The start message (and `python -m liverhu addresses`) shows the Tailscale address when it is on.
+
 ## Updating to a new version
 
 macOS / Linux: in Terminal, inside the installed folder, run `bash scripts/update_mac_linux.sh`,
-then restart the website. This keeps the install, the password and all results.
+then restart the website (if it runs in the background, the update restarts it for you).
+This keeps the install, the password and all results.
 Windows: download the new ZIP, unzip it, and copy its `liverhu` folder over the old one
 (keep your `.venv` and `liverhu_data`), then restart `start_windows.bat`.
 

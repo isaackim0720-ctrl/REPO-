@@ -36,6 +36,30 @@ CREATE TABLE IF NOT EXISTS cases (
 """
 
 
+def relocate_case_file(case_dir: Path) -> None:
+    """If the HUnter folder was moved (e.g. out of Downloads) while scans were waiting, point the
+    waiting scan's saved file paths at the new location."""
+    f = Path(case_dir) / "case.json"
+    try:
+        job = json.loads(f.read_text())
+        old_case_dir = Path(job["out_dir"])
+    except (OSError, ValueError, KeyError):
+        return
+    if old_case_dir == Path(case_dir):
+        return
+    old_root, new_root = str(old_case_dir.parents[3]), str(Path(case_dir).parents[3])   # .../<data>/jobs/<j>/cases/<c>
+
+    def move(p):
+        return new_root + p[len(old_root):] if isinstance(p, str) and p.startswith(old_root) else p
+    case = job.get("case") or {}
+    if "path" in case:
+        case["path"] = move(case["path"])
+    if isinstance(case.get("files"), list):
+        case["files"] = [move(p) for p in case["files"]]
+    job["out_dir"] = str(case_dir)
+    f.write_text(json.dumps(job))
+
+
 def now() -> str:
     return dt.datetime.now().isoformat(timespec="seconds")
 
@@ -146,6 +170,7 @@ class Worker(threading.Thread):
     def _run_case(self, jid: int, row: dict):
         s = self.store
         d = s.case_dir(jid, row["id"])
+        relocate_case_file(d)
         s.x("UPDATE cases SET status='running', started_at=?, current_step='starting' WHERE id=?", (now(), row["id"]))
         t0 = time.time()
         pkg_root = str(Path(__file__).resolve().parents[2])

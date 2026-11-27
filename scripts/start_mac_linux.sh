@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Starts the HUnter website. Keep this terminal open while people use it.
+# Starts the HUnter website. Keep this terminal open while people use it
+# (or run it in the background with no Terminal window: bash scripts/background_mac.sh on).
 # On computers with 8 GB RAM or less, low-memory mode is switched on automatically
 # (set LIVERHU_LOW_MEMORY=0 to prevent that, or add --low-memory to force it).
 set -euo pipefail
@@ -14,6 +15,4 @@ case " $* " in *" --low-memory "*) ;; *)
     LOWMEM="--low-memory"
   fi ;;
 esac
-echo "Others on the lab network open http://<one of these addresses>:8000"
-(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null || true)
 exec .venv/bin/python -m liverhu serve --data "$PWD/liverhu_data" $LOWMEM "$@"

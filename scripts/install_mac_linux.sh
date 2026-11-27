@@ -39,14 +39,14 @@ if [ ! -x .venv/bin/python ]; then
   fi
 fi
 
-. .venv/bin/activate
+python() { "$PWD/.venv/bin/python" "$@"; }   # used directly: still works after the folder is moved
 echo "Installing into: $(python --version 2>&1)"
 python -m pip install --upgrade pip
 # Linux without an NVIDIA GPU: use the much smaller CPU-only PyTorch build.
 if [ "$(uname)" = "Linux" ] && ! command -v nvidia-smi >/dev/null; then
-  nice -n 10 python -m pip install torch --index-url https://download.pytorch.org/whl/cpu || true
+  nice -n 10 "$PWD/.venv/bin/python" -m pip install torch --index-url https://download.pytorch.org/whl/cpu || true
 fi
-nice -n 10 python -m pip install -r requirements.txt
-nice -n 10 python -m liverhu download-models
+nice -n 10 "$PWD/.venv/bin/python" -m pip install -r requirements.txt
+nice -n 10 "$PWD/.venv/bin/python" -m liverhu download-models
 echo ""
 echo "== Installed! Start the website with:  bash scripts/start_mac_linux.sh =="
