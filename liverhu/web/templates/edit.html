@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Adjust circles · {{ case.case_id }} · Liver HU{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="row" style="justify-content:space-between;align-items:center">
+    <h1>Adjust circles · {{ case.case_id }}</h1>
+    <a class="btn" href="/jobs/{{ case.job_id }}">← Back to results</a>
+  </div>
+  <p class="muted small">Pick a circle, then <b>click or drag</b> on the image to move it. Arrow keys move it one pixel;
+    the slice buttons (or Page Up / Page Down) change the slice. The numbers update as you move. Press <b>Save this circle</b>
+    to keep it; the automatic circle is remembered, so you can always reset.</p>
+  <div id="tabs" class="tabs"></div>
+</section>
+<div id="editor" class="editor">
+  <section class="card">
+    <div id="wrap" class="canvas-wrap">
+      <img id="slice" alt="CT slice" draggable="false">
+      <svg id="ov" preserveAspectRatio="none"></svg>
+    </div>
+    <div class="row" style="margin-top:12px;align-items:center">
+      <button id="down" type="button" title="Page Down">▼ Slice toward feet</button>
+      <input id="zslider" type="range" min="0" max="0" value="0" style="flex:1;min-width:120px" aria-label="slice">
+      <button id="up" type="button" title="Page Up">Slice toward head ▲</button>
+    </div>
+    <p id="zinfo" class="small muted"></p>
+    <p class="small muted">Outlines: <span class="roi-ll">segments 2/3</span> · <span style="color:#65a30d">segment 4</span> · <span class="roi-rl1">segments 5–8</span> · <span class="roi-spl">spleen</span> · <span style="color:#ca8a04">falciform ligament (est.)</span>. Patient's right is on the left of the image.</p>
+  </section>
+  <section class="card">
+    <h2 id="roiname">…</h2>
+    <table class="readout">
+      <tbody>
+        <tr><th>Mean</th><td id="r_mean" class="num">–</td><td class="muted small" id="a_mean"></td></tr>
+        <tr><th>SD</th><td id="r_sd" class="num">–</td><td class="muted small" id="a_sd"></td></tr>
+        <tr><th>Min</th><td id="r_min" class="num">–</td><td class="muted small" id="a_min"></td></tr>
+        <tr><th>Max</th><td id="r_max" class="num">–</td><td class="muted small" id="a_max"></td></tr>
+        <tr><th>Area</th><td id="r_area" class="num">–</td><td class="muted small" id="a_area"></td></tr>
+        <tr><th>Diameter</th><td colspan="2"><button id="dminus" type="button">−</button> <input id="diam" type="number" min="3" max="60" step="0.5" style="width:80px"> mm <button id="dplus" type="button">+</button></td></tr>
+        <tr><th>Where</th><td colspan="2" id="r_where" class="small"></td></tr>
+      </tbody>
+    </table>
+    <p class="small muted" id="autonote"></p>
+    <ul id="warn" class="flags" hidden></ul>
+    <div class="row" style="margin-top:14px">
+      <button id="save" class="primary" type="button">Save this circle</button>
+      <button id="undo" type="button">Undo my changes</button>
+      <button id="reset" type="button" class="danger" hidden>Reset to automatic</button>
+    </div>
+    <p id="status" class="small"></p>
+  </section>
+</div>
+{% endblock %}
+{% block scripts %}<script>initEditor({{ case.id }});</script>{% endblock %}

@@ -67,6 +67,7 @@ async function startUpload() {
     fd.append("preferred_slice_mm", $("slice").value);
     if ($("ident").checked) fd.append("include_identifiers", "on");
     if ($("saveseg").checked) fd.append("save_segmentation", "on");
+    fd.append("keep_edit_data", $("keepedit").checked ? "on" : "off");
     const { job_id } = await getJSON("/api/jobs", { method: "POST", body: fd });
     let sent = 0, batch = [], batchBytes = 0;
     const flush = async () => {
@@ -151,10 +152,10 @@ function caseCard(c) {
       <td class="num">${fmt(r.mean_hu)}</td><td class="num">${fmt(r.sd_hu)}</td>
       <td class="num">${fmt(r.min_hu, 0)}</td><td class="num">${fmt(r.max_hu, 0)}</td>
       <td class="num">${fmt(r.area_cm2, 2)}</td><td class="num small">${fmt(r.z_mm)}${r.dicom_instance ? ` (#${r.dicom_instance})` : ""}</td>
-      <td class="small">${where}</td></tr>`;
+      <td class="small">${where}${r.manual ? ` · <b title="moved by hand">✎ ${esc(r.edited_by || "")}</b>` : ""}</td></tr>`;
   }).join("");
   const flags = (c.flags || []).length ? `<ul class="flags">${c.flags.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>` : "";
-  const img = c.has_qa ? `<img src="/cases/${c.id}/qa.png" alt="QA image for ${esc(c.case_id)}" onclick="openImg(this.src)">`
+  const img = c.has_qa ? `<img src="/cases/${c.id}/qa.png?r=${c.revision || 0}" alt="QA image for ${esc(c.case_id)}" onclick="openImg(this.src)">`
     : `<div class="muted small">${done ? "No image" : "Image appears when the scan is finished."}</div>`;
   const elapsed = c.status === "running" && c.started_at ? Math.max(0, (Date.now() - Date.parse(c.started_at)) / 1000) : null;
   const status = c.status === "running" ? `${esc(c.step || "starting")}${elapsed !== null ? ` · ${mins(elapsed)} so far` : ""}` : c.status;
@@ -167,7 +168,7 @@ function caseCard(c) {
       ${c.error ? `<p class="error small">${esc(c.error)}</p>` : ""}
       ${rows ? `<div class="table-wrap"><table><thead><tr><th>ROI</th><th class="num">Mean HU</th><th class="num">SD</th><th class="num">Min</th><th class="num">Max</th><th class="num">Area cm²</th><th class="num">z mm (image)</th><th>Where</th></tr></thead><tbody>${rows}</tbody></table></div>` : ""}
       ${flags}
-      ${done ? `<p class="small"><a href="/cases/${c.id}/result.json" target="_blank">all values (JSON)</a> · <a href="/cases/${c.id}/log.txt" target="_blank">log</a></p>` : ""}
+      ${done ? `<p class="small">${c.editable ? `<a class="btn" href="/cases/${c.id}/edit">Adjust circles</a> &nbsp;` : ""}<a href="/cases/${c.id}/result.json" target="_blank">all values (JSON)</a> · <a href="/cases/${c.id}/log.txt" target="_blank">log</a></p>` : ""}
     </div></div></section>`;
 }
 
@@ -187,7 +188,7 @@ async function refreshJob(id) {
   if (d.cases_ahead) p += ` · ${d.cases_ahead} scan(s) from earlier uploads first`;
   $("progress").textContent = p;
   $("message").textContent = j.message || "";
-  const sig = JSON.stringify(d.cases.map((c) => [c.id, c.status, c.step, c.has_qa, c.status === "running" ? Date.now() : 0]));
+  const sig = JSON.stringify(d.cases.map((c) => [c.id, c.status, c.step, c.has_qa, c.revision, c.status === "running" ? Date.now() : 0]));
   if (sig !== lastSig) { $("cases").innerHTML = d.cases.map(caseCard).join(""); lastSig = sig; }
   return ["done", "failed", "cancelled"].includes(j.status);
 }
@@ -199,4 +200,120 @@ function initJob(id) {
     if (!finished) setTimeout(tick, 4000);
   };
   tick();
+}
+
+// ---------- circle editor ----------
+const ROI_COLORS = { LL: "#00e5ff", RL1: "#ff4dd2", RL2: "#ffb000", SPL: "#4ade80" };
+
+async function initEditor(caseId) {
+  const info = await getJSON(`/api/cases/${caseId}/edit-info`);
+  if (!info.available) {
+    $("editor").innerHTML = `<section class="card"><p>This scan can't be edited: it was measured before the editor existed
+      (or with editing turned off), so its image data wasn't kept. Upload the scan again to adjust its circles.</p></section>`;
+    return;
+  }
+  const [X, Y, Z] = info.shape, [sx, sy, sz] = info.spacing;
+  const W = X * sx, H = Y * sy;                       // image size in mm (display)
+  const st = {};                                      // per-circle working state
+  for (const r of info.rois) st[r.key] = { ...r, orig: { x: r.x, y: r.y, z: r.z, d: r.diameter_mm }, d: r.diameter_mm };
+  let key = info.rois[0].key, timer = null, dragging = false, lastZ = -1;
+  const ov = $("ov"), img = $("slice");
+  ov.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  $("zslider").max = Z - 1;
+
+  const tabs = () => {
+    $("tabs").innerHTML = info.rois.map((r) => `<button type="button" data-k="${r.key}" class="${r.key === key ? "active" : ""}">
+      <span style="color:${r.key === key ? "inherit" : ROI_COLORS[r.key]}">●</span> ${esc(r.name)}${st[r.key].manual ? '<span class="dot">✎</span>' : ""}${st[r.key].placed ? "" : '<span class="dot">(not placed)</span>'}</button>`).join("");
+    $("tabs").querySelectorAll("button").forEach((b) => (b.onclick = () => { key = b.dataset.k; draw(true); }));
+  };
+  const toMm = (x, y) => [(X - 1 - x + 0.5) * sx, (Y - 1 - y + 0.5) * sy];
+  const fromEvent = (e) => {
+    const rect = ov.getBoundingClientRect();
+    const mx = ((e.clientX - rect.left) / rect.width) * W, my = ((e.clientY - rect.top) / rect.height) * H;
+    return [X - 1 - Math.floor(mx / sx), Y - 1 - Math.floor(my / sy)];
+  };
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+  function draw(full) {
+    const s = st[key];
+    if (s.z !== lastZ) { img.src = `/cases/${caseId}/slice/${s.z}.png`; lastZ = s.z; }
+    const [cx, cy] = toMm(s.x, s.y);
+    ov.innerHTML = `<circle cx="${cx}" cy="${cy}" r="${s.d / 2}" fill="none" stroke="${ROI_COLORS[key]}" stroke-width="${Math.max(W, H) / 250}"/>
+      <text x="${cx}" y="${cy - s.d / 2 - 2}" fill="${ROI_COLORS[key]}" font-size="${Math.max(W, H) / 35}" text-anchor="middle" font-weight="700">${key}</text>`;
+    $("zslider").value = s.z;
+    $("diam").value = s.d;
+    if (full) {
+      tabs();
+      $("roiname").textContent = s.name;
+      $("reset").hidden = !s.manual;
+      const a = s.auto;
+      for (const [id, f, nd] of [["mean", "mean_hu", 1], ["sd", "sd_hu", 1], ["min", "min_hu", 0], ["max", "max_hu", 0], ["area", "area_cm2", 2]])
+        $("a_" + id).textContent = a && a[f] !== null && a[f] !== undefined ? `automatic: ${fmt(a[f], nd)}` : "";
+      $("autonote").textContent = s.manual ? `This circle was moved by hand${s.edited_by ? " by " + s.edited_by : ""}.` : (s.placed ? "Automatic circle." : `Not placed automatically${s.reason ? " (" + s.reason + ")" : ""}; place it by hand if appropriate.`);
+      $("status").textContent = "";
+    }
+    clearTimeout(timer);
+    timer = setTimeout(measure, 120);
+  }
+
+  async function measure() {
+    const s = st[key];
+    try {
+      const m = await getJSON(`/api/cases/${caseId}/measure?key=${key}&x=${s.x}&y=${s.y}&z=${s.z}&d=${s.d}`);
+      s.x = m.x; s.y = m.y; s.z = m.z;          // server keeps the circle inside the image
+      $("r_mean").textContent = fmt(m.mean_hu) + " HU"; $("r_sd").textContent = fmt(m.sd_hu);
+      $("r_min").textContent = fmt(m.min_hu, 0); $("r_max").textContent = fmt(m.max_hu, 0);
+      $("r_area").textContent = fmt(m.area_cm2, 2) + " cm²";
+      $("r_where").textContent = (key === "SPL" ? "spleen" : `segment ${m.segment_at_center} · ${m.side_of_ligament} of ligament`) +
+        ` · z ${fmt(m.z_mm)} mm` + (m.dicom_instance ? ` (image ${m.dicom_instance})` : "");
+      $("zinfo").textContent = `Slice ${s.z + 1} of ${Z}`;
+      const w = m.warnings || [];
+      $("warn").hidden = !w.length;
+      $("warn").innerHTML = w.map((t) => `<li>${esc(t)}</li>`).join("");
+    } catch (e) { $("status").innerHTML = `<span class="error">${esc(e.message)}</span>`; }
+  }
+
+  const moveTo = (e) => { const [x, y] = fromEvent(e); const s = st[key]; s.x = clamp(x, 0, X - 1); s.y = clamp(y, 0, Y - 1); draw(false); };
+  ov.addEventListener("pointerdown", (e) => { dragging = true; ov.setPointerCapture(e.pointerId); moveTo(e); });
+  ov.addEventListener("pointermove", (e) => { if (dragging) moveTo(e); });
+  ov.addEventListener("pointerup", () => { dragging = false; });
+  const setZ = (z) => { st[key].z = clamp(z, 0, Z - 1); draw(false); };
+  $("up").onclick = () => setZ(st[key].z + 1);
+  $("down").onclick = () => setZ(st[key].z - 1);
+  $("zslider").oninput = (e) => setZ(parseInt(e.target.value, 10));
+  const setD = (d) => { st[key].d = clamp(Math.round(d * 2) / 2, 3, 60); draw(false); };
+  $("diam").onchange = (e) => setD(parseFloat(e.target.value) || st[key].d);
+  $("dminus").onclick = () => setD(st[key].d - 1);
+  $("dplus").onclick = () => setD(st[key].d + 1);
+  document.addEventListener("keydown", (e) => {
+    if (e.target.tagName === "INPUT") return;
+    const s = st[key];
+    const moves = { ArrowLeft: [1, 0], ArrowRight: [-1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] };   // screen -> patient axes
+    if (moves[e.key]) { s.x = clamp(s.x + moves[e.key][0], 0, X - 1); s.y = clamp(s.y + moves[e.key][1], 0, Y - 1); draw(false); e.preventDefault(); }
+    else if (e.key === "PageUp") { setZ(s.z + 1); e.preventDefault(); }
+    else if (e.key === "PageDown") { setZ(s.z - 1); e.preventDefault(); }
+  });
+  $("undo").onclick = () => { const s = st[key]; Object.assign(s, { x: s.orig.x, y: s.orig.y, z: s.orig.z, d: s.orig.d }); draw(true); };
+  $("save").onclick = async () => {
+    const s = st[key];
+    $("save").disabled = true; $("status").textContent = "Saving…";
+    try {
+      const r = await getJSON(`/api/cases/${caseId}/rois/${key}`, { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ x: s.x, y: s.y, z: s.z, d: s.d }) });
+      const fresh = await getJSON(`/api/cases/${caseId}/edit-info`);
+      for (const f of fresh.rois) st[f.key] = { ...f, orig: { x: f.x, y: f.y, z: f.z, d: f.diameter_mm }, d: f.diameter_mm };
+      draw(true);
+      $("status").innerHTML = `<b>Saved.</b> Liver mean (3 circles) is now ${fmt(r.liver_mean)} HU` + (r.spleen_mean !== null ? `, spleen ${fmt(r.spleen_mean)} HU.` : ".");
+    } catch (e) { $("status").innerHTML = `<span class="error">Could not save: ${esc(e.message)}</span>`; }
+    $("save").disabled = false;
+  };
+  $("reset").onclick = async () => {
+    if (!confirm("Put this circle back where the automatic method placed it?")) return;
+    await getJSON(`/api/cases/${caseId}/rois/${key}/reset`, { method: "POST" });
+    const fresh = await getJSON(`/api/cases/${caseId}/edit-info`);
+    for (const f of fresh.rois) st[f.key] = { ...f, orig: { x: f.x, y: f.y, z: f.z, d: f.diameter_mm }, d: f.diameter_mm };
+    draw(true);
+    $("status").innerHTML = "<b>Reset to the automatic circle.</b>";
+  };
+  draw(true);
 }

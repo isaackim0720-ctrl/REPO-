@@ -143,6 +143,10 @@ def process_case(case: CaseInput, out_dir: Path, settings: Settings, log=print) 
             title += f"   spleen {spleen_mean:.1f} HU"
         render_qa(vol, seg, rois, spacing, out_dir / "qa.png", title=title,
                   spleen_mask=spleen_mask, spleen_roi=spleen, summary=result)
+        if settings.keep_edit_data:
+            from .edit import save_edit_data
+            if save_edit_data(out_dir, vol, seg, spleen_mask, img.affine, spacing, slice_positions):
+                result["editable"] = True
         if settings.save_segmentation:
             import nibabel as nib
             nib.save(nib.Nifti1Image(seg, img.affine), out_dir / "liver_segments.nii.gz")
@@ -183,6 +187,7 @@ def flatten(result: dict) -> dict:
             f"{key}_z_mm": _r(r.get("z_mm")), f"{key}_image_no": r.get("dicom_instance"),
             f"{key}_segment": r.get("segment_at_center"),
             f"{key}_side_of_ligament": r.get("side_of_ligament"),
+            f"{key}_manual": ("yes, by " + (r.get("edited_by") or "?")) if r.get("manual") else "",
         })
     inp = result.get("input", {})
     row.update({

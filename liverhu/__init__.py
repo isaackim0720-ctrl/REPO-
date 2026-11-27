@@ -1,2 +1,2 @@
 """Automated liver CT attenuation (HU) ROI measurement."""
-__version__ = "0.2.1"   # 0.2: spleen ROI, liver-spleen metrics; .1: https, clearer progress
+__version__ = "0.3.0"   # 0.3: circle editor; 0.2: spleen, https, low-memory

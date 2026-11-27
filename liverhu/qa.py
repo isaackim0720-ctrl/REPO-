@@ -84,7 +84,7 @@ def _axial_panel(ax, ct, r, spacing, contours, crop_mask, show_ligament_from=Non
         ax.set_xlim(c0 * sx - pad, c1 * sx + pad)
         ax.set_ylim(r1 * sy + pad, r0 * sy - pad)
     _orient(ax)
-    ax.set_title(f"{r.name} - axial z = {_fmt(r.z_mm)} mm"
+    ax.set_title(f"{r.name}{' (moved by hand)' if getattr(r, 'manual', False) else ''} - axial z = {_fmt(r.z_mm)} mm"
                  + (f" (image {r.dicom_instance})" if getattr(r, "dicom_instance", None) else ""),
                  color="white", fontsize=10)
     where = ("spleen" if r.key == "SPL" else

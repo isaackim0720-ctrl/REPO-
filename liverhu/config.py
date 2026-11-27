@@ -32,6 +32,9 @@ class Settings:
     preferred_slice_mm: float = 3.0
     # Also save the liver-segment mask (NIfTI) with each result.
     save_segmentation: bool = False
+    # Keep a compressed copy of the liver + spleen region so circles can be adjusted by
+    # hand later in the website (deleted together with the upload).
+    keep_edit_data: bool = True
 
     def to_dict(self) -> dict:
         d = asdict(self)

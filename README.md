@@ -71,8 +71,15 @@ unzip (step 2; a Mac unzips automatically), then in Finder right-click the folde
 * Open the upload to watch progress, check the QA images, and download Excel/CSV.
   *All results (Excel)* in the top bar gives every scan ever measured.
 
+**Adjusting circles by hand:** on a finished scan, click **Adjust circles**. Pick a circle, click or
+drag it to a new spot, change slice or size, and watch mean/SD/min/max update; **Save this circle**
+stores it as *moved by hand* (the automatic circle is kept, **Reset to automatic** brings it back).
+Liver mean, liver − spleen and liver/spleen update, the check image is redrawn, and the Excel file
+shows `LL_manual` etc. This works for scans measured with v0.3 or later, because the liver/spleen
+region of each scan is kept for it (about 10–30 MB per scan; untick under *Advanced* to not keep it).
+
 The website is only reachable inside your lab network and only with the password.
-Scans never leave the server computer and are **deleted right after they are measured**;
+Scans never leave the server computer. The uploaded files are **deleted right after they are measured**;
 only the numbers and QA images are kept (in `liverhu_data/`). Start with `--keep-uploads` to
 keep them. Patient names are never read; PatientID/AccessionNumber/StudyDate are added to
 results only if you tick that option. Each study also gets a pseudonymous `study_key`.

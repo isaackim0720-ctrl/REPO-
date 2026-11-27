@@ -86,6 +86,22 @@ class RoiResult:
     fallback_level: int = 0
     region_median_hu: float = float("nan")
     dicom_instance: int | None = None   # DICOM InstanceNumber of the ROI slice (DICOM input)
+    manual: bool = False                # True when a person moved/resized this circle
+    edited_by: str = ""
+    edited_at: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "RoiResult":
+        import dataclasses
+        names = {f.name for f in dataclasses.fields(cls)}
+        kw = {k: v for k, v in d.items() if k in names}
+        for k in ("center_voxel", "center_ras_mm", "segments_in_roi"):
+            if k in kw and kw[k] is not None:
+                kw[k] = tuple(kw[k])
+        for k, v in list(kw.items()):
+            if v is None and isinstance(getattr(cls, k, None), float):
+                kw[k] = float("nan")
+        return cls(**kw)
 
     def as_dict(self) -> dict:
         d = asdict(self)

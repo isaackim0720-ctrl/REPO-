@@ -26,6 +26,8 @@
     </div>
     <p class="small"><label><input id="ident" type="checkbox"> Add DICOM PatientID, AccessionNumber and StudyDate to the results</label><br>
       <span class="muted">Off by default. Turn on only if your study approval allows identifiers in the results file.</span></p>
+    <p class="small"><label><input id="keepedit" type="checkbox" checked> Keep the liver/spleen part of each scan so the circles can be <b>adjusted by hand</b> later</label><br>
+      <span class="muted">About 10–30 MB per scan, stored only on this computer and deleted when the upload is deleted.</span></p>
     <p class="small"><label><input id="saveseg" type="checkbox"> Also keep the liver-segment mask (NIfTI) for each case</label></p>
   </details>
   <div id="upbox" hidden>
