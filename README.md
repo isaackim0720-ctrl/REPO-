@@ -112,7 +112,14 @@ unzip (step 2; a Mac unzips automatically), then in Finder right-click the folde
   at once), `.zip` files, or `.nii/.nii.gz`. Each study is measured separately, one at a time,
   about 2–4 minutes per scan on a normal PC.
 * Open the upload to watch progress, check the QA images, and download Excel/CSV.
-  *All results (Excel)* in the top bar gives every scan ever measured.
+* **Export** in the top bar opens the export page. It shows the scan count, the median liver
+  HU, outliers, and a chart of every measured scan's liver mean HU. Each type of scan
+  (non-contrast or contrast-enhanced) gets its own chart, the typical range is shaded, and
+  outliers are marked by name. Outliers follow Tukey's rule within the same scan type: more
+  than 1.5 × the spread of the middle half beyond it, judged once there are at least 5 scans.
+  Hover over a dot for all four circles; click it to open the result. Choose a batch or all of
+  them, then press **Export to Excel** (or CSV). The file has a `liver_mean_outlier` column
+  (HIGH/LOW).
 
 **Scan library (store now, measure later):** open **Library** in the top bar and drop studies
 there. They are only stored, not measured. The list shows every stored study with its series,

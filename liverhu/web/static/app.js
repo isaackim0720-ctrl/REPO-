@@ -529,3 +529,221 @@ async function initEditor(caseId) {
   };
   draw(true);
 }
+
+// ---------- export page: liver mean per scan, outliers, table ----------
+const SVGNS = "http://www.w3.org/2000/svg";
+const WARN_PATH = "M8 1.5 15 14H1z";
+function svgEl(tag, attrs, parent) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) e.setAttribute(k, v);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+function niceTicks(lo, hi, count = 5) {
+  const raw = Math.max(hi - lo, 1) / count;
+  const mag = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 5, 10].map((m) => m * mag).find((s) => s >= raw);
+  const out = [];
+  for (let v = Math.floor(lo / step) * step; v <= Math.ceil(hi / step) * step + 1e-9; v += step) out.push(Math.round(v * 1e6) / 1e6);
+  return out;
+}
+const dateOf = (s) => (s || "").replace("T", " ").slice(0, 16);
+const resultUrl = (s) => `/jobs/${s.job_id}?case=${s.id}`;
+const outText = (s, f) => (s.outlier === "high" ? `High outlier: above the typical range (up to ${fmt(f.high)} HU)` : `Low outlier: below the typical range (from ${fmt(f.low)} HU)`);
+
+let exp = null;
+function initExport() {
+  const sel = $("batch");
+  const want = new URLSearchParams(location.search).get("batch") || "";
+  sel.onchange = () => {
+    history.replaceState(null, "", sel.value ? `?batch=${sel.value}` : location.pathname);
+    loadExport(sel.value);
+  };
+  loadExport(want);
+  let t;
+  window.addEventListener("resize", () => { clearTimeout(t); t = setTimeout(() => exp && renderExportCharts(), 150); });
+}
+
+async function loadExport(batch) {
+  if (exp) $("charts").style.opacity = 0.5;            // keep the old view while reloading
+  try { exp = await getJSON(`/api/export${batch ? `?job=${encodeURIComponent(batch)}` : ""}`); } catch (e) {
+    $("exportnote").textContent = `Could not load the results: ${e.message}`; return;
+  }
+  const sel = $("batch");
+  if (sel.options.length === 1) {
+    for (const b of exp.batches) {
+      const o = document.createElement("option");
+      o.value = b.id; o.textContent = `${b.label} (${b.n})`;
+      sel.appendChild(o);
+    }
+  }
+  sel.value = batch;
+  const q = batch ? `?job=${encodeURIComponent(batch)}` : "";
+  $("xlsx").href = `/download/results.xlsx${q}`;
+  $("csv").href = `/download/results.csv${q}`;
+  const s = exp.scans, groups = Object.entries(exp.groups);
+  $("exportnote").textContent = s.length ? `${s.length} measured scan${s.length === 1 ? "" : "s"}${batch ? " in this batch" : ""}. Scans that failed are listed in the file too, with the reason.` : "Nothing measured yet.";
+  $("k_n").textContent = s.length;
+  const main = groups.slice().sort((a, b) => b[1].n - a[1].n)[0];
+  const vals = main ? s.filter((x) => (x.phase || "uncertain") === main[0] || (main[0] === "uncertain" && !["non-contrast", "contrast-enhanced"].includes(x.phase))).map((x) => x.liver_mean).filter((v) => v !== null).sort((a, b) => a - b) : [];
+  const med = vals.length ? (vals.length % 2 ? vals[(vals.length - 1) / 2] : (vals[vals.length / 2 - 1] + vals[vals.length / 2]) / 2) : null;
+  $("k_med").textContent = fmt(med);
+  $("k_med").parentElement.previousElementSibling.textContent = groups.length > 1 && main ? `Median liver mean, ${main[1].title.toLowerCase()}` : "Median liver mean";
+  $("k_out").textContent = s.filter((x) => x.outlier).length;
+  $("k_warn").textContent = s.filter((x) => x.hu_warning).length;
+  renderExportCharts();
+  renderOutliers();
+  renderScanTable();
+  $("charts").style.opacity = 1;
+}
+
+function renderExportCharts() {
+  const box = $("charts");
+  box.innerHTML = "";
+  if (!exp.scans.length) {
+    box.innerHTML = `<section class="card"><p class="muted">No measured scans yet. Measure scans on the <a href="/">Measure</a> or <a href="/library">Library</a> page and they appear here.</p></section>`;
+    return;
+  }
+  for (const [g, info] of Object.entries(exp.groups)) {
+    const scans = exp.scans.filter((s) => groupOf(s.phase) === g && s.liver_mean !== null);
+    const card = document.createElement("section");
+    card.className = "card chart-card";
+    card.innerHTML = `<div class="chart-head"><h2>Liver mean HU per scan</h2><span class="muted">${esc(info.title)}, ${info.n} scan${info.n === 1 ? "" : "s"}</span></div>
+      <div class="chart-key small muted"><span><i class="k-dot"></i>one scan (mean of its 3 liver circles)</span>${info.fences ? `<span><i class="k-band"></i>typical range</span><span><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="${WARN_PATH}" fill="#e6b450"/></svg>outlier</span>` : ""}</div>
+      <div class="chart"></div>
+      ${info.fences ? "" : `<p class="small muted">Outliers are marked once this group has at least 5 scans.</p>`}`;
+    box.appendChild(card);
+    drawLiverChart(card.querySelector(".chart"), scans, info);
+  }
+}
+
+function groupOf(phase) { return ["non-contrast", "contrast-enhanced"].includes(phase) ? phase : "uncertain"; }
+
+function drawLiverChart(holder, scans, info) {
+  const f = info.fences;
+  const W = Math.max(holder.clientWidth, 280), H = 300;
+  const m = { l: 46, r: f ? 86 : 14, t: 16, b: 46 };      // right margin holds the median / range labels
+  const pw = W - m.l - m.r, ph = H - m.t - m.b;
+  const vals = scans.map((s) => s.liver_mean);
+  let lo = Math.min(...vals, ...(f ? [f.low] : [])), hi = Math.max(...vals, ...(f ? [f.high] : []));
+  const pad = Math.max(5, (hi - lo) * 0.08);
+  const ticks = niceTicks(lo - pad, hi + pad, 5);
+  const y0 = ticks[0], y1 = ticks[ticks.length - 1];
+  const Y = (v) => m.t + ph - ((v - y0) / (y1 - y0)) * ph;
+  const step = pw / scans.length;
+  const X = (i) => m.l + (i + 0.5) * step;
+  const svg = svgEl("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}`, tabindex: 0, role: "img",
+    "aria-label": `Liver mean HU of ${scans.length} scans, ${info.title}. ${f ? `Median ${f.median} HU, typical range ${f.low} to ${f.high} HU, ${scans.filter((s) => s.outlier).length} outliers.` : ""} Use the arrow keys to step through the scans, Enter to open one. The same values are in the table below.` });
+  holder.appendChild(svg);
+  for (const t of ticks) {                                          // recessive grid + y ticks
+    svgEl("line", { x1: m.l, x2: W - m.r, y1: Y(t), y2: Y(t), class: "grid" }, svg);
+    svgEl("text", { x: m.l - 8, y: Y(t) + 4, "text-anchor": "end", class: "tick" }, svg).textContent = t;
+  }
+  svgEl("text", { x: 12, y: m.t + ph / 2, transform: `rotate(-90 12 ${m.t + ph / 2})`, "text-anchor": "middle", class: "axis-title" }, svg).textContent = "HU";
+  if (f) {
+    svgEl("rect", { x: m.l, width: pw, y: Y(f.high), height: Math.max(0, Y(f.low) - Y(f.high)), class: "band" }, svg);
+    svgEl("line", { x1: m.l, x2: W - m.r, y1: Y(f.median), y2: Y(f.median), class: "median" }, svg);
+    const gx = W - m.r + 8;                                       // labels in the right margin, never on the dots
+    svgEl("text", { x: gx, y: Y(f.median) + 4, class: "band-label" }, svg).textContent = `median ${fmt(f.median)}`;
+    if (Y(f.median) - Y(f.high) >= 15) svgEl("text", { x: gx, y: Y(f.high) + 4, class: "band-label" }, svg).textContent = `↑ ${fmt(f.high)}`;
+    if (Y(f.low) - Y(f.median) >= 15) svgEl("text", { x: gx, y: Y(f.low) + 4, class: "band-label" }, svg).textContent = `↓ ${fmt(f.low)}`;
+  }
+  svgEl("line", { x1: m.l, x2: W - m.r, y1: m.t + ph, y2: m.t + ph, class: "axis" }, svg);
+  const every = Math.max(1, Math.ceil(scans.length / Math.max(2, Math.floor(pw / 56))));
+  scans.forEach((s, i) => {
+    if (i % every === 0 || i === scans.length - 1) {
+      if (i === scans.length - 1 && i % every !== 0 && (i % every) < every / 2) return;   // avoid a crowded last tick
+      svgEl("text", { x: X(i), y: m.t + ph + 18, "text-anchor": "middle", class: "tick" }, svg).textContent = `#${s.n}`;
+    }
+  });
+  svgEl("text", { x: m.l + pw / 2, y: H - 6, "text-anchor": "middle", class: "axis-title" }, svg).textContent = "Scan number, in the order measured";
+  const cross = svgEl("line", { y1: m.t, y2: m.t + ph, class: "crosshair", visibility: "hidden" }, svg);
+  const r = scans.length > 150 ? 3 : 4;
+  scans.forEach((s, i) => svgEl("circle", { cx: X(i), cy: Y(s.liver_mean), r: s.outlier ? r + 1.5 : r, class: s.outlier ? "dot out" : "dot" }, svg));
+  const placed = [];                                                // label outliers only, without collisions
+  scans.forEach((s, i) => {
+    if (!s.outlier) return;
+    const right = X(i) < m.l + pw * 0.62;
+    let ly = s.outlier === "high" ? Y(s.liver_mean) - 12 : Y(s.liver_mean) + 22;
+    const tw = Math.min(220, 26 + 7 * (s.name.length + 8));
+    const x0 = right ? X(i) + 8 : X(i) - 8 - tw;
+    for (let k = 0; k < 6 && placed.some((p) => Math.abs(p.y - ly) < 16 && x0 < p.x + p.w && p.x < x0 + tw); k++) ly += s.outlier === "high" ? -16 : 16;
+    ly = Math.min(m.t + ph - 4, Math.max(m.t + 12, ly));
+    placed.push({ x: x0, y: ly, w: tw });
+    const g = svgEl("g", { class: "out-label" }, svg);
+    svgEl("path", { d: WARN_PATH, transform: `translate(${right ? X(i) + 6 : X(i) - 22} ${ly - 11}) scale(0.95)`, class: "warn-icon" }, g);
+    svgEl("text", { x: right ? X(i) + 24 : X(i) - 26, y: ly, "text-anchor": right ? "start" : "end", class: "label" }, g).textContent = `${s.name}, ${fmt(s.liver_mean)} HU`;
+  });
+  const hit = svgEl("rect", { x: m.l, y: m.t, width: pw, height: ph, fill: "transparent", class: "hit" }, svg);
+  let cur = -1;
+  const show = (i, px, py) => {
+    cur = Math.max(0, Math.min(scans.length - 1, i));
+    const s = scans[cur];
+    cross.setAttribute("x1", X(cur)); cross.setAttribute("x2", X(cur)); cross.setAttribute("visibility", "visible");
+    const b = svg.getBoundingClientRect();
+    showTip(s, f, b.left + window.scrollX + (px ?? X(cur)), b.top + window.scrollY + (py ?? Y(s.liver_mean)));
+  };
+  const hide = () => { cross.setAttribute("visibility", "hidden"); $("tip").hidden = true; };
+  const idxAt = (ev) => Math.floor((ev.clientX - svg.getBoundingClientRect().left - m.l) / step);
+  hit.addEventListener("pointermove", (ev) => { const b = svg.getBoundingClientRect(); show(idxAt(ev), ev.clientX - b.left, ev.clientY - b.top); });
+  hit.addEventListener("pointerleave", hide);
+  hit.addEventListener("click", (ev) => { const i = idxAt(ev); if (scans[i]) location.href = resultUrl(scans[i]); });
+  hit.style.cursor = "pointer";
+  svg.addEventListener("focus", () => show(cur < 0 ? Math.max(0, scans.findIndex((s) => s.outlier)) : cur));
+  svg.addEventListener("blur", hide);
+  svg.addEventListener("keydown", (ev) => {
+    if (ev.key === "ArrowRight" || ev.key === "ArrowLeft") { ev.preventDefault(); show(cur + (ev.key === "ArrowRight" ? 1 : -1)); }
+    else if (ev.key === "Home" || ev.key === "End") { ev.preventDefault(); show(ev.key === "Home" ? 0 : scans.length - 1); }
+    else if (ev.key === "Enter" && scans[cur]) location.href = resultUrl(scans[cur]);
+    else if (ev.key === "Escape") hide();
+  });
+}
+
+function showTip(s, f, pageX, pageY) {
+  const tip = $("tip");
+  tip.replaceChildren();
+  const add = (cls, text, parent = tip, tag = "div") => { const e = document.createElement(tag); if (cls) e.className = cls; e.textContent = text; parent.appendChild(e); return e; };
+  const v = add("tip-value", "");
+  add("", `${fmt(s.liver_mean)} HU`, v, "b");
+  add("", " liver mean", v, "span");
+  add("tip-name", s.name);
+  add("tip-sub", `#${s.n}, ${s.batch}, measured ${dateOf(s.measured_at)}`);
+  const rows = add("tip-rows", "");
+  const c = s.circles || {};
+  for (const [k, label] of [["LL", "LL"], ["RL1", "RL1"], ["RL2", "RL2"], ["SPL", "Spleen"]]) {
+    add("", label, rows, "span"); add("num", fmt(c[k]), rows, "span");
+  }
+  add("", "Liver − spleen", rows, "span"); add("num", fmt(s.l_minus_s), rows, "span");
+  const flag = (text) => { const e = add("tip-flag", ""); e.insertAdjacentHTML("afterbegin", WARN_ICON); add("", text, e, "span"); };
+  if (s.outlier && f) flag(outText(s, f));
+  if (s.hu_warning) flag("A circle's mean HU is outside the expected range");
+  add("tip-hint", "Click (or press Enter) to open the result");
+  tip.hidden = false;
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  const left = Math.min(pageX + 14, window.scrollX + document.documentElement.clientWidth - w - 8);
+  const top = pageY - h - 14 < window.scrollY ? pageY + 16 : pageY - h - 14;
+  tip.style.left = `${Math.max(window.scrollX + 8, left)}px`;
+  tip.style.top = `${top}px`;
+}
+
+function renderOutliers() {
+  const outs = exp.scans.filter((s) => s.outlier);
+  $("outliercard").hidden = !outs.length;
+  $("outliers").innerHTML = outs.map((s) => {
+    const f = (exp.groups[groupOf(s.phase)] || {}).fences;
+    return `<li><span class="huwarn">${WARN_ICON}</span><div><a href="${resultUrl(s)}"><b>${esc(s.name)}</b></a> <span class="num">${fmt(s.liver_mean)} HU</span>
+      <div class="small muted">${esc(f ? outText(s, f) : "")}. ${esc((exp.groups[groupOf(s.phase)] || {}).title || "")}, ${esc(s.batch)}, scan #${s.n}.</div></div></li>`;
+  }).join("");
+}
+
+function renderScanTable() {
+  const rows = exp.scans.map((s) => {
+    const c = s.circles || {};
+    const notes = [s.outlier ? `${s.outlier} outlier` : "", s.hu_warning ? "HU outside expected range" : "", s.quality && s.quality !== "good" ? `quality: ${s.quality}` : "", s.scan_complete === false ? "incomplete scan" : ""].filter(Boolean).join("; ");
+    return `<tr class="${s.outlier ? "is-outlier" : ""}"><td class="num">${s.n}</td><td><a href="${resultUrl(s)}">${esc(s.name)}</a></td><td class="small">${esc(s.batch)}</td>
+      <td class="small">${esc(s.phase || "–")}</td><td class="num"><b>${fmt(s.liver_mean)}</b>${s.outlier ? `<span class="huwarn" title="${esc(s.outlier)} outlier">${WARN_ICON}</span>` : ""}</td>
+      <td class="num">${fmt(c.LL)}</td><td class="num">${fmt(c.RL1)}</td><td class="num">${fmt(c.RL2)}</td><td class="num">${fmt(c.SPL)}</td>
+      <td class="num">${fmt(s.l_minus_s)}</td><td class="small">${esc(notes)}</td></tr>`;
+  });
+  $("scanrows").innerHTML = rows.join("") || `<tr><td colspan="11" class="muted">Nothing measured yet.</td></tr>`;
+}

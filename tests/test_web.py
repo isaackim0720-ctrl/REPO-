@@ -75,3 +75,43 @@ def test_https_certificate_is_created_once_and_loads(tmp_path):
     ctx.load_cert_chain(str(cert), str(key))          # valid pair, usable by the server
     before = cert.read_bytes()
     assert tls.ensure_cert(tmp_path)[0].read_bytes() == before   # reused, not regenerated
+
+
+def test_export_page_and_outliers(client):
+    c, app = client
+    a = ("maria", PW)
+    assert 'href="/export"' in c.get("/", auth=a).text and "/download/results.xlsx" not in c.get("/", auth=a).text
+    r = c.get("/export", auth=a)
+    assert r.status_code == 200 and "Export to Excel" in r.text and 'aria-current="page">Export' in r.text
+    store = app.state.store
+    jid = c.post("/api/jobs", data={"label": "cohort"}, auth=a).json()["job_id"]
+    values = [55.0, 57.0, 58.0, 60.0, 61.0, 59.0, 95.0, 120.0]      # 95 = outlier among the non-contrast
+    for i, v in enumerate(values):
+        phase = "contrast-enhanced" if v == 120.0 else "non-contrast"
+        res = {"case_id": f"p{i}", "status": "ok", "liver_mean_hu_3roi": v, "contrast_phase": phase,
+               "rois": [{"key": "LL", "mean_hu": v}], "flags": []}
+        store.x("INSERT INTO cases (job_id, case_id, status, result_json, finished_at) VALUES (?,?,?,?,?)",
+                (jid, f"p{i}", "ok", json.dumps(res), f"2026-01-01T00:00:0{i}"))
+    store.x("INSERT INTO cases (job_id, case_id, status, result_json) VALUES (?,?,?,?)",
+            (jid, "bad", "failed", json.dumps({"case_id": "bad", "status": "failed", "error": "x"})))
+    d = c.get("/api/export", auth=a).json()
+    assert [s["n"] for s in d["scans"]] == list(range(1, 9))              # failed scans are not plotted
+    out = {s["name"]: s["outlier"] for s in d["scans"]}
+    assert out["p6"] == "high" and out["p7"] == "" and sum(bool(v) for v in out.values()) == 1
+    assert d["groups"]["non-contrast"]["n"] == 7 and d["groups"]["non-contrast"]["fences"]["median"] == 59.0
+    assert d["groups"]["contrast-enhanced"]["fences"] is None              # too few to judge
+    assert d["batches"] == [{"id": jid, "label": "cohort", "n": 8}]
+    assert c.get(f"/api/export?job={jid + 1}", auth=a).json()["scans"] == []
+    csv = c.get("/download/results.csv", auth=a).text
+    head = csv.splitlines()[0].split(",")
+    assert head[head.index("liver_mean_HU_3ROI") + 1] == "liver_mean_outlier"
+    assert "HIGH" in [line.split(",")[head.index("liver_mean_outlier")] for line in csv.splitlines()[1:]]
+
+
+def test_outlier_rule():
+    from liverhu.outliers import fences, mark_outliers
+    f = fences([10, 10, 10, 10, 10])
+    assert f["low"] == 10 - 1.5 * 5 and f["high"] == 10 + 1.5 * 5               # minimum spread of 5 HU
+    items = [{"v": v, "p": "non-contrast"} for v in (50, 52, 54, 56, 58, 20)] + [{"v": None, "p": None}]
+    g = mark_outliers(items, "v", "p")
+    assert items[5]["outlier"] == "low" and items[6]["outlier"] == "" and set(g) == {"non-contrast", "uncertain"}

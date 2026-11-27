@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% set active = "export" %}
+{% block title %}Export · HUnter{% endblock %}
+{% block content %}
+<h1>Export results</h1>
+<p class="muted">Check the liver values for outliers, then download the spreadsheet: one row per measured scan, with all four circles (mean, SD, min, max, size), liver − spleen, liver/spleen, quality notes and the settings used.</p>
+
+<div class="filter-row">
+  <label for="batch">Scans from</label>
+  <select id="batch"><option value="">All batches</option></select>
+</div>
+
+<div class="export-top">
+  <section class="kpis" aria-label="Summary">
+    <div class="kpi"><span class="kpi-label">Scans measured</span><span class="kpi-value" id="k_n">–</span></div>
+    <div class="kpi"><span class="kpi-label">Median liver mean</span><span class="kpi-value"><span id="k_med">–</span> <small>HU</small></span></div>
+    <div class="kpi"><span class="kpi-label">Outliers</span><span class="kpi-value" id="k_out">–</span></div>
+    <div class="kpi"><span class="kpi-label">Outside the expected HU range</span><span class="kpi-value" id="k_warn">–</span></div>
+  </section>
+  <section class="card export-card">
+    <h2>Download</h2>
+    <a id="xlsx" class="btn primary" href="/download/results.xlsx">Export to Excel</a>
+    <a id="csv" class="btn" href="/download/results.csv">Export CSV</a>
+    <p id="exportnote" class="small muted"></p>
+  </section>
+</div>
+
+<div id="charts"></div>
+
+<section class="card" id="outliercard" hidden>
+  <h2>Outliers to check</h2>
+  <p class="small muted">Open each one and look at its circles before using its numbers. A scan can be an outlier for a real reason (for example a very fatty liver).</p>
+  <ul id="outliers" class="outlier-list"></ul>
+</section>
+
+<section class="card">
+  <details id="tablewrap">
+    <summary>Every scan as a table</summary>
+    <div class="table-wrap" style="margin-top:12px">
+      <table class="worklist scans-table">
+        <thead><tr><th class="num">#</th><th>Scan</th><th>Batch</th><th>Type</th><th class="num">Liver mean</th><th class="num">LL</th><th class="num">RL1</th><th class="num">RL2</th><th class="num">Spleen</th><th class="num">Liver − spleen</th><th>Notes</th></tr></thead>
+        <tbody id="scanrows"></tbody>
+      </table>
+    </div>
+  </details>
+</section>
+
+<details class="howto">
+  <summary>How outliers are found</summary>
+  <p class="small muted">Each scan is compared only with scans of the same type (non-contrast or contrast-enhanced), because contrast raises liver HU by tens of HU. In a group of at least 5 scans, a liver mean is an outlier when it lies more than 1.5 times the spread of the middle half of the scans below or above that middle half (Tukey's rule; the shaded band on the chart). The spreadsheet has the same mark in its <code>liver_mean_outlier</code> column.</p>
+</details>
+<div id="tip" class="chart-tip" role="status" aria-live="polite" hidden></div>
+{% endblock %}
+{% block scripts %}<script>initExport();</script>{% endblock %}

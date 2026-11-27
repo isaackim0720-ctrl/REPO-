@@ -542,12 +542,63 @@ def create_app(data: Path, keep_uploads: bool = False, start_worker: bool = True
             deleted.append(cid)
         return {"deleted": deleted}
 
+    # ---------- export page ----------
+    @app.get("/export", response_class=HTMLResponse)
+    def export_page(request: Request, u: str = Depends(user)):
+        return page(request, "export.html", user=u, active="export")
+
+    def _measured(job: int | None):
+        sql = ("SELECT c.id, c.job_id, c.case_id, c.status, c.result_json, c.finished_at, j.label "
+               "FROM cases c JOIN jobs j ON j.id = c.job_id "
+               "WHERE c.result_json IS NOT NULL AND c.status IN ('ok','partial')")
+        args: tuple = ()
+        if job:
+            sql += " AND c.job_id=?"
+            args = (job,)
+        return store.q(sql + " ORDER BY COALESCE(c.finished_at, ''), c.id", args)
+
+    @app.get("/api/export")
+    def export_data(job: int | None = None, u: str = Depends(user)):
+        from ..outliers import mark_outliers
+        scans = []
+        for i, r in enumerate(_measured(job), 1):
+            res = json.loads(r["result_json"])
+            rois = {x["key"]: x for x in res.get("rois", [])}
+            scans.append({
+                "n": i, "id": r["id"], "job_id": r["job_id"], "name": r["case_id"],
+                "batch": r["label"] or f"Upload {r['job_id']}", "measured_at": r["finished_at"],
+                "phase": res.get("contrast_phase"), "quality": res.get("quality"),
+                "liver_mean": res.get("liver_mean_hu_3roi"), "spleen_mean": res.get("spleen_mean_hu"),
+                "l_minus_s": res.get("liver_minus_spleen_hu"),
+                "circles": {k: (rois.get(k) or {}).get("mean_hu") for k in ("LL", "RL1", "RL2", "SPL")},
+                "hu_warning": any((x or {}).get("hu_check") for x in rois.values()),
+                "scan_complete": res.get("scan_complete")})
+        groups = mark_outliers(scans, "liver_mean", "phase")
+        batches = store.q("SELECT j.id, j.label, COUNT(c.id) AS n FROM jobs j JOIN cases c ON c.job_id = j.id "
+                          "WHERE c.result_json IS NOT NULL AND c.status IN ('ok','partial') "
+                          "GROUP BY j.id ORDER BY j.id DESC")
+        return {"scans": scans, "groups": groups,
+                "batches": [{"id": b["id"], "label": b["label"] or f"Upload {b['id']}", "n": b["n"]} for b in batches]}
+
     def _rows(job: int | None):
+        from ..outliers import mark_outliers
         if job:
             rows = store.q("SELECT result_json FROM cases WHERE job_id=? AND result_json IS NOT NULL ORDER BY id", (job,))
         else:
             rows = store.q("SELECT result_json FROM cases WHERE result_json IS NOT NULL ORDER BY id")
-        return [flatten(json.loads(r["result_json"])) for r in rows]
+        flat = [flatten(json.loads(r["result_json"])) for r in rows]
+        ok = [f for f in flat if f.get("status") in ("ok", "partial")]
+        mark_outliers(ok, "liver_mean_HU_3ROI", "contrast_phase", "_outlier")
+        out = []
+        for f in flat:      # the outlier column goes right after the liver mean
+            o = {"high": "HIGH", "low": "LOW"}.get(f.pop("_outlier", ""), "")
+            row = {}
+            for k, v in f.items():
+                row[k] = v
+                if k == "liver_mean_HU_3ROI":
+                    row["liver_mean_outlier"] = o
+            out.append(row)
+        return out
 
     @app.get("/download/results.{ext}")
     def download(ext: str, job: int | None = None, u: str = Depends(user)):
